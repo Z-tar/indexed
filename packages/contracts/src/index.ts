@@ -22,7 +22,7 @@ export const PRODUCT_DEFAULTS = {
   vectorDimension: 4096,
   ossRegion: "cn-hangzhou",
   capture: {
-    segmentSeconds: 10,
+    segmentSeconds: 30,
     framesPerSecond: 4,
     maxWidth: 1280,
     maxHeight: 720,

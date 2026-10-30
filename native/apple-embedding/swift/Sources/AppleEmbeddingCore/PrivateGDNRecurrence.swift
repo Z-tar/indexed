@@ -67,30 +67,52 @@ public final class PrivateGDNRecurrence: @unchecked Sendable {
                   value.allSatisfy(\.isFinite), betaValues.allSatisfy(\.isFinite), currentState.allSatisfy(\.isFinite) else {
                 return fallback("nonfinite")
             }
-            let logDecay = decay.map { logf(min(1, max(1e-6, $0))) }
+            let logDecay = decay.map { Float16(logf(min(1, max(1e-6, $0)))) }
             let matrix = 128 * 128, plane = 16 * matrix
             var output = [Float16](repeating: 0, count: tokens * 16 * 128)
             do {
                 for start in stride(from: 0, to: tokens, by: 64) {
                     try cancellation.check()
                     let valid = min(64, tokens - start)
-                    // Keep the staging allocation and clear padding, especially
-                    // the last partial chunk after a previous longer request.
-                    for index in dynamic.indices { dynamic[index] = 0 }
-                    for head in 0..<16 {
-                        let headBase = head * matrix
-                        for index in 0..<matrix { dynamic[4 * plane + headBase + index] = currentState[headBase + index] }
-                        for row in 0..<valid {
-                            let source = ((start + row) * 16 + head) * 128
-                            let scalar = (start + row) * 16 + head
-                            dynamic[headBase + row * 128 + row] = Float16(logDecay[scalar])
-                            for column in 0..<128 {
-                                let target = headBase + row * 128 + column
-                                dynamic[plane + target] = key[source + column]
-                                dynamic[2 * plane + headBase + column * 128 + row] = key[source + column]
-                                dynamic[3 * plane + target] = betaValues[scalar]
-                                dynamic[5 * plane + target] = value[source + column]
-                                dynamic[6 * plane + target] = Float16(Float(query[source + column]) * 4096)
+                    // Keep the staging allocation and clear padding with memset,
+                    // then pack dynamic planes without array bounds checks.
+                    dynamic.withUnsafeMutableBufferPointer { dynBuf in
+                        let dyn = dynBuf.baseAddress!
+                        memset(dyn, 0, dynBuf.count * MemoryLayout<Float16>.stride)
+                        currentState.withUnsafeBufferPointer { stateBuf in
+                            (dyn + 4 * plane).update(from: stateBuf.baseAddress!, count: plane)
+                        }
+                        query.withUnsafeBufferPointer { qBuf in
+                            key.withUnsafeBufferPointer { kBuf in
+                                value.withUnsafeBufferPointer { vBuf in
+                                    betaValues.withUnsafeBufferPointer { bBuf in
+                                        logDecay.withUnsafeBufferPointer { dBuf in
+                                            let qPtr = qBuf.baseAddress!
+                                            let kPtr = kBuf.baseAddress!
+                                            let vPtr = vBuf.baseAddress!
+                                            let bPtr = bBuf.baseAddress!
+                                            let dPtr = dBuf.baseAddress!
+                                            for head in 0..<16 {
+                                                let headBase = head * matrix
+                                                for row in 0..<valid {
+                                                    let scalar = (start + row) * 16 + head
+                                                    let source = scalar * 128
+                                                    let rowBase = headBase + row * 128
+                                                    dyn[rowBase + row] = dPtr[scalar]
+                                                    let betaScalar = bPtr[scalar]
+                                                    (dyn + plane + rowBase).update(from: kPtr + source, count: 128)
+                                                    (dyn + 5 * plane + rowBase).update(from: vPtr + source, count: 128)
+                                                    for column in 0..<128 {
+                                                        let target = rowBase + column
+                                                        dyn[2 * plane + headBase + column * 128 + row] = kPtr[source + column]
+                                                        dyn[3 * plane + target] = betaScalar
+                                                        dyn[6 * plane + target] = Float16(Float(qPtr[source + column]) * 4096)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -100,11 +122,18 @@ public final class PrivateGDNRecurrence: @unchecked Sendable {
                     catch { evaluations += program.evaluations - before; throw error }
                     evaluations += program.evaluations - before
                     currentState = Array(raw[0..<plane])
-                    for head in 0..<16 {
-                        for row in 0..<valid {
-                            let source = plane + head * matrix + row * 128
-                            let target = ((start + row) * 16 + head) * 128
-                            for column in 0..<128 { output[target + column] = raw[source + column] }
+                    raw.withUnsafeBufferPointer { rawBuf in
+                        output.withUnsafeMutableBufferPointer { outBuf in
+                            let rawPtr = rawBuf.baseAddress!
+                            let outPtr = outBuf.baseAddress!
+                            for head in 0..<16 {
+                                let headOffset = plane + head * matrix
+                                for row in 0..<valid {
+                                    let source = headOffset + row * 128
+                                    let target = ((start + row) * 16 + head) * 128
+                                    (outPtr + target).update(from: rawPtr + source, count: 128)
+                                }
+                            }
                         }
                     }
                 }

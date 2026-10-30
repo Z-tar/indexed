@@ -238,18 +238,23 @@ async function runSearch(event) {
     });
     if (!request.current()) return;
     state.hits = data.hits || [];
+    state.groupedHits = groupHits(state.hits);
     renderHits();
     const elapsed = Math.round(performance.now() - started);
     const hidden = Number(data.hiddenMissing || 0);
     const sourceSummary = Number(data.sources?.web || 0)
       ? ` · 本机 ${number(data.sources?.local)} / 网页 ${number(data.sources?.web)}`
       : "";
-    $("#asset-search-status").textContent = `${state.hits.length ? `${number(state.hits.length)} 个结果` : "没有匹配的结果"} · ${elapsed}ms`
+    const groupCountDesc = state.groupedHits.length !== state.hits.length
+      ? `${number(state.groupedHits.length)} 个素材 (${number(state.hits.length)} 处匹配)`
+      : `${number(state.hits.length)} 个结果`;
+    $("#asset-search-status").textContent = `${state.hits.length ? groupCountDesc : "没有匹配的结果"} · ${elapsed}ms`
       + sourceSummary
       + (hidden ? ` · 另有 ${number(hidden)} 条结果的文件已不在磁盘上` : "");
   } catch (error) {
     if (!request.current()) return;
     state.hits = [];
+    state.groupedHits = [];
     renderHits();
     $("#asset-search-status").textContent = error.message;
   } finally {
@@ -257,28 +262,231 @@ async function runSearch(event) {
   }
 }
 
+function normalizeVideoTitle(title) {
+  if (!title) return "";
+  return String(title)
+    .toLowerCase()
+    .replace(/【[^】]*】/g, "")
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\([^\)]*\)/g, "")
+    .replace(/_哔哩哔哩_bilibili/gi, "")
+    .replace(/_bilibili/gi, "")
+    .replace(/ - youtube/gi, "")
+    .replace(/[\s\-_—·:：,，。！!？?、|｜~～]+/g, "")
+    .trim();
+}
+
+function titlesMatch(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const minLen = Math.min(a.length, b.length);
+  const maxLen = Math.max(a.length, b.length);
+  if (minLen >= 6 && (a.includes(b) || b.includes(a)) && (minLen / maxLen > 0.6)) {
+    return true;
+  }
+  return false;
+}
+
+function sameVideoUrl(url1, url2) {
+  try {
+    const u1 = new URL(url1);
+    const u2 = new URL(url2);
+    if (u1.hostname !== u2.hostname) return false;
+    return u1.pathname === u2.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function groupHits(hits) {
+  const groups = [];
+  for (const asset of hits) {
+    if (asset.kind !== "video") {
+      groups.push({
+        isGroup: false,
+        primary: asset,
+        segments: [],
+      });
+      continue;
+    }
+
+    const norm = normalizeVideoTitle(asset.name);
+    let matched = groups.find((g) => g.isGroup && (
+      (g.norm && norm && titlesMatch(g.norm, norm)) ||
+      (asset.openUrl && g.primary.openUrl && sameVideoUrl(asset.openUrl, g.primary.openUrl))
+    ));
+
+    const site = asset.openUrl?.includes("bilibili")
+      ? "bilibili"
+      : (asset.openUrl?.includes("youtube") ? "youtube" : "local");
+    const segment = {
+      startSeconds: Number(asset.startSeconds || 0),
+      endSeconds: Number(asset.endSeconds || 0),
+      sidecarText: asset.sidecarText || "",
+      openUrl: asset.openUrl || "",
+      score: Number(asset.score || 0),
+      sourceSite: site,
+      asset,
+    };
+
+    if (!matched) {
+      matched = {
+        isGroup: true,
+        norm,
+        primary: asset,
+        segments: [segment],
+        sources: { [site]: asset.openUrl || "" },
+      };
+      groups.push(matched);
+    } else {
+      const exists = matched.segments.some((s) => Math.abs(s.startSeconds - segment.startSeconds) < 2);
+      if (!exists) {
+        matched.segments.push(segment);
+      }
+      if (asset.openUrl && !matched.sources[site]) {
+        matched.sources[site] = asset.openUrl;
+      }
+      if ((asset.score || 0) > (matched.primary.score || 0)) {
+        matched.primary = asset;
+      }
+    }
+  }
+
+  for (const group of groups) {
+    if (group.isGroup) {
+      group.segments.sort((a, b) => a.startSeconds - b.startSeconds);
+      const maxScore = Math.max(...group.segments.map((s) => s.score));
+      group.segments.forEach((s) => { s.isBest = s.score >= maxScore - 0.0001; });
+    }
+  }
+
+  return groups;
+}
+
 function renderHits() {
-  $("#asset-results").innerHTML = state.hits.length ? state.hits.map((asset, index) => `
-    <article class="asset-card" role="button" tabindex="0" aria-label="打开 ${escapeHtml(asset.name)}" data-kind="${escapeHtml(asset.kind)}" data-source="${escapeHtml(asset.source || "local")}" data-index="${index}">
-      ${asset.previewUrl && asset.kind !== "document" ? `<img src="${escapeHtml(asset.previewUrl)}" alt="" loading="lazy" />` : `<div class="media-empty" aria-hidden="true">${asset.kind === "document" ? "文档" : "暂无预览"}</div>`}
+  const groups = state.groupedHits || groupHits(state.hits);
+  state.groupedHits = groups;
+  $("#asset-results").innerHTML = groups.length ? groups.map((group, groupIndex) => {
+    const asset = group.primary;
+    const isVideo = group.isGroup && asset.kind === "video";
+    const segmentCount = isVideo ? group.segments.length : 0;
+    const sources = group.sources || {};
+
+    return `
+    <article class="asset-card ${isVideo && segmentCount > 1 ? "video-group-card" : ""}" role="button" tabindex="0" aria-label="打开 ${escapeHtml(asset.name)}" data-kind="${escapeHtml(asset.kind)}" data-source="${escapeHtml(asset.source || "local")}" data-group-index="${groupIndex}">
+      <div class="asset-card-poster-wrap">
+        ${asset.previewUrl && asset.kind !== "document" ? `<img src="${escapeHtml(asset.previewUrl)}" alt="" loading="lazy" />` : `<div class="media-empty" aria-hidden="true">${asset.kind === "document" ? "文档" : "暂无预览"}</div>`}
+        ${segmentCount > 1 ? `<span class="group-segment-pill">${segmentCount} 个匹配片段</span>` : ""}
+      </div>
       <div class="asset-card-body">
         <strong title="${escapeHtml(asset.openUrl || asset.path)}">${escapeHtml(asset.name)}</strong>
         <div class="asset-card-meta">
           <span class="asset-kind">${escapeHtml(assetKinds[asset.kind] || "素材")}</span>
-          ${asset.openUrl ? `<span class="asset-origin">网页 ↗</span>` : ""}
+          ${sources.bilibili ? `<a class="asset-origin origin-bilibili" href="${escapeHtml(sources.bilibili)}" target="_blank" rel="noopener noreferrer" title="在 B站 打开">B站 ↗</a>` : ""}
+          ${sources.youtube ? `<a class="asset-origin origin-youtube" href="${escapeHtml(sources.youtube)}" target="_blank" rel="noopener noreferrer" title="在 YouTube 打开">YouTube ↗</a>` : ""}
+          ${!sources.bilibili && !sources.youtube && asset.openUrl ? `<span class="asset-origin">网页 ↗</span>` : ""}
           ${asset.kind === "video" && asset.endSeconds ? `<span class="asset-timecode">${time(asset.startSeconds)}–${time(asset.endSeconds)}</span>` : ""}
         </div>
         ${asset.sidecarText ? `<p class="asset-sidecar">${escapeHtml(asset.sidecarText)}</p>` : ""}
+        ${segmentCount > 1 ? `
+          <div class="timeline-chips-wrap">
+            <div class="timeline-chips">
+              ${group.segments.slice(0, 5).map((seg) => `
+                <button type="button" class="timeline-chip ${seg.isBest ? "is-best" : ""}" 
+                        title="${time(seg.startSeconds)}–${time(seg.endSeconds)} (${seg.sourceSite === "bilibili" ? "B站" : seg.sourceSite === "youtube" ? "油管" : "本地"})${seg.sidecarText ? ` · ${escapeHtml(seg.sidecarText)}` : ""}"
+                        data-chip-url="${escapeHtml(seg.openUrl)}" data-chip-start="${seg.startSeconds}">
+                  ${time(seg.startSeconds)}${seg.isBest ? "★" : ""}
+                </button>
+              `).join("")}
+              ${segmentCount > 5 ? `
+                <button type="button" class="timeline-chip-toggle" data-toggle-drawer="${groupIndex}" title="查看全部 ${segmentCount} 个片段">
+                  +${segmentCount - 5} ▾
+                </button>
+              ` : `
+                <button type="button" class="timeline-chip-toggle" data-toggle-drawer="${groupIndex}" title="查看切片详情">
+                  详情 ▾
+                </button>
+              `}
+            </div>
+          </div>
+        ` : ""}
         <p class="asset-path" title="${escapeHtml(asset.openUrl || asset.path)}">${escapeHtml(asset.libraryName || (asset.openUrl ? "网页收藏" : "本机素材"))}</p>
       </div>
-    </article>`).join("") : `<div class="empty">${state.query
-      ? `没有找到匹配素材。试试其他描述或文件类型。`
-      : ""}</div>`;
+      ${segmentCount > 1 ? `
+        <div class="segments-drawer" id="drawer-${groupIndex}" hidden>
+          <div class="segments-drawer-head">
+            <span>共命中 ${segmentCount} 个时间片段（点击跳转）：</span>
+          </div>
+          <div class="segments-drawer-list">
+            ${group.segments.map((seg) => `
+              <div class="drawer-segment-row ${seg.isBest ? "is-best" : ""}" data-chip-url="${escapeHtml(seg.openUrl)}" data-chip-start="${seg.startSeconds}">
+                <span class="drawer-time">${time(seg.startSeconds)}–${time(seg.endSeconds)}</span>
+                <span class="drawer-site ${seg.sourceSite}">${seg.sourceSite === "bilibili" ? "B站" : seg.sourceSite === "youtube" ? "YouTube" : "本地"}</span>
+                <p class="drawer-snippet">${escapeHtml(seg.sidecarText || "视觉匹配片段")}</p>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
+    </article>`;
+  }).join("") : `<div class="empty">${state.query
+    ? `没有找到匹配素材。试试其他描述或文件类型。`
+    : ""}</div>`;
+
   $$("#asset-results img").forEach((image) => image.addEventListener("error", () => image.replaceWith(Object.assign(document.createElement("div"), { className: "media-empty", textContent: "预览不可用" })), { once: true }));
+
+  // Main card click
   $$("#asset-results .asset-card").forEach((card) => {
-    card.addEventListener("click", () => openAsset(state.hits[Number(card.dataset.index)]));
+    card.addEventListener("click", (event) => {
+      if (event.target.closest(".timeline-chips-wrap, .segments-drawer, .asset-origin")) return;
+      const groupIndex = Number(card.dataset.groupIndex);
+      const group = state.groupedHits[groupIndex];
+      if (group) openAsset(group.primary);
+    });
     card.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); card.click(); }
+      if (event.key === "Enter" || event.key === " ") {
+        if (event.target.closest(".timeline-chips-wrap, .segments-drawer, .asset-origin")) return;
+        event.preventDefault();
+        card.click();
+      }
+    });
+  });
+
+  // Timeline chip & drawer row clicks
+  $$("#asset-results [data-chip-url]").forEach((elem) => {
+    elem.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const url = elem.dataset.chipUrl;
+      const start = Number(elem.dataset.chipStart || 0);
+      if (url) {
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else {
+        const card = elem.closest(".asset-card");
+        const groupIndex = Number(card?.dataset.groupIndex);
+        const group = state.groupedHits[groupIndex];
+        const seg = group?.segments.find((s) => Math.abs(s.startSeconds - start) < 0.1);
+        if (seg) openAsset(seg.asset);
+      }
+    });
+  });
+
+  // Drawer expand/collapse
+  $$("#asset-results [data-toggle-drawer]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const groupIndex = button.dataset.toggleDrawer;
+      const drawer = $(`#drawer-${groupIndex}`);
+      if (drawer) {
+        drawer.hidden = !drawer.hidden;
+        const count = state.groupedHits[groupIndex]?.segments?.length || 0;
+        if (drawer.hidden) {
+          button.textContent = count > 5 ? `+${count - 5} ▾` : "详情 ▾";
+        } else {
+          button.textContent = count > 5 ? `收起 ▴` : "收起 ▴";
+        }
+      }
     });
   });
 }

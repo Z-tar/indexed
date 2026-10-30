@@ -322,7 +322,13 @@ export function appleEmbeddingOptionsFromProfile(
   const embedding = profile?.embedding ?? {};
   const native = embedding.native ?? {};
   const executionMode = requireAppleExecutionMode(native);
-  const { mode, visionCompute } = executionDefaults(executionMode);
+  const defaults = executionDefaults(executionMode);
+  const { mode } = defaults;
+  // Experimental C/D candidates accept an explicit vision placement so hosts
+  // with a slow Core ML ANE vision path (M3 family) can keep vision on GPU.
+  const visionCompute: AppleVisionCompute = ["c", "d"].includes(executionMode)
+    && ["gpu", "ane"].includes(String(native.visionCompute ?? ""))
+    ? String(native.visionCompute) as AppleVisionCompute : defaults.visionCompute;
   const indexedHome = indexedHomeDirectory();
   const managedAssets = managedAppleEmbeddingAssets(indexedHome);
   const configuredRecurrenceSlots = numberList(native.privateANE?.recurrenceLayerSlots);
@@ -360,6 +366,19 @@ export function appleEmbeddingOptionsFromProfile(
     maxRestarts: boundedInteger(native.maxRestarts, 3, 0, 100),
     expectedModel: text(embedding.model),
     expectedEmbeddingSpace: text(profile.spaceId),
+    extraArgs: (Array.isArray(native.extraArgs)
+      ? native.extraArgs
+          .filter((item: unknown): item is string => typeof item === "string" && item.length > 0)
+          .slice(0, 16)
+      : []
+    ).filter((arg: string, index: number, all: string[]) => {
+      // Private-ANE flags are C/D-only by the helper's contract; drop the flag
+      // and its value so A/B profiles never receive them via passthrough.
+      if (["c", "d"].includes(executionMode)) return true;
+      const previous = all[index - 1] ?? "";
+      if (arg.startsWith("--private-ane-") || arg.startsWith("--video-")) return false;
+      return !(previous.startsWith("--private-ane-") || previous.startsWith("--video-"));
+    }),
     ...overrides,
   };
 }

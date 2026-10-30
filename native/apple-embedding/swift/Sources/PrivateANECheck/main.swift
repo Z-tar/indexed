@@ -1,4 +1,6 @@
 import Foundation
+import MLX
+import MLXNN
 import PrivateANEBridge
 import AppleEmbeddingCore
 
@@ -126,9 +128,117 @@ func check() throws {
     print("{\"bounds\":\"passed\",\"hardware\":\"passed\",\"values\":40960,\"linear\":\"passed\",\"shared_workspace\":\"passed\",\"cancel\":\"passed\"}")
 }
 
+func probeJSON(_ value: [String: Any]) {
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
+        print(String(decoding: data, as: UTF8.self))
+    }
+}
+
+func probeValues(_ count: Int, seed: UInt32) -> [Float16] {
+    var state = seed
+    return (0..<count).map { _ in
+        state = state &* 1664525 &+ 1013904223
+        return Float16((Float(state >> 8) / Float(1 << 24) * 2 - 1) * 0.5)
+    }
+}
+
+func probeMedian(_ values: [Double]) -> Double {
+    let sorted = values.sorted()
+    return sorted[sorted.count / 2]
+}
+
+func probeFP16Bytes(_ values: [Float16]) -> [Int8] {
+    values.withUnsafeBytes { Array($0.assumingMemoryBound(to: Int8.self)) }
+}
+
+/// M3-generation compatibility probe: the frozen int8 constexpr flavor versus
+/// a pre-dequantized FP16 conv, then timing versus the GPU suffix kernels on
+/// the full C-mode prefix shape (in=2048, out=2*4608, seq=2112).
+func aneConvProbe() throws {
+    let cancellation = CancellationToken()
+    do {
+        let mil = try PrivateANELinearWeights.mil(inputDimension: 128, outputDimension: 128, sequenceLength: 64)
+        _ = try PrivateANEProgram(mil: mil, weights: [Int8](repeating: 1, count: 128 * 128),
+            scales: [Float16](repeating: 0.5, count: 128), inputElements: [128 * 64], outputElements: [128 * 64])
+        probeJSON(["probe": "int8_small", "compiled": true,
+                   "note": "constexpr_blockwise_shift_scale accepted by this ANE compiler"])
+    } catch {
+        probeJSON(["probe": "int8_small", "compiled": false, "error": String("\(error)".prefix(400))])
+    }
+    let smallIn = 128, smallOut = 128, smallSeq = 64
+    let smallWeight = probeValues(smallIn * smallOut, seed: 5)
+    let smallX = probeValues(smallIn * smallSeq, seed: 7)
+    do {
+        let mil = try PrivateANELinearWeights.milFP16(inputDimension: smallIn, outputDimension: smallOut, sequenceLength: smallSeq)
+        let program = try PrivateANEProgram(mil: mil, weights: probeFP16Bytes(smallWeight), scales: [],
+            inputElements: [smallIn * smallSeq], outputElements: [smallOut * smallSeq])
+        let output = try program.evaluate([smallX], cancellation: cancellation)[0]
+        var difference = 0.0, norm = 0.0
+        for out in 0..<smallOut { for token in 0..<smallSeq {
+            var expected: Float = 0
+            for channel in 0..<smallIn {
+                expected += Float(smallWeight[out * smallIn + channel]) * Float(smallX[channel * smallSeq + token])
+            }
+            difference += pow(Double(output[out * smallSeq + token]) - Double(expected), 2)
+            norm += pow(Double(expected), 2)
+        } }
+        probeJSON(["probe": "fp16_small", "compiled": true, "relative_l2": sqrt(difference / max(norm, 1e-20))])
+    } catch {
+        probeJSON(["probe": "fp16_small", "compiled": false, "error": String("\(error)".prefix(400))])
+        return
+    }
+    Memory.cacheLimit = 512 * 1024 * 1024
+    let inDim = 2048, outDim = 9216, sequence = 2112, iterations = 7
+    let weight = probeValues(inDim * outDim, seed: 11)
+    let x = probeValues(inDim * sequence, seed: 13)
+    do {
+        let mil = try PrivateANELinearWeights.milFP16(inputDimension: inDim, outputDimension: outDim, sequenceLength: sequence)
+        let program = try PrivateANEProgram(mil: mil, weights: probeFP16Bytes(weight), scales: [],
+            inputElements: [inDim * sequence], outputElements: [outDim * sequence])
+        _ = try program.evaluate([x], cancellation: cancellation)
+        var aneTimes: [Double] = []
+        for _ in 0..<iterations {
+            let started = ContinuousClock.now
+            _ = try program.evaluate([x], cancellation: cancellation)
+            let duration = started.duration(to: .now).components
+            aneTimes.append(Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15)
+        }
+        probeJSON(["probe": "ane_fp16_bench", "in": inDim, "out": outDim, "seq": sequence,
+                   "ms": aneTimes, "median_ms": probeMedian(aneTimes)])
+    } catch {
+        probeJSON(["probe": "ane_fp16_bench", "compiled": false, "error": String("\(error)".prefix(400))])
+    }
+    let dense = MLXArray((0..<(inDim * outDim)).map { Float(weight[$0]) }, [outDim, inDim]).asType(.float16)
+    let linear = QuantizedLinear(weight: dense, bias: nil, groupSize: 64, bits: 8)
+    let gpuX = MLXArray((0..<(inDim * sequence)).map { Float(x[$0]) }, [1, sequence, inDim]).asType(.float16)
+    eval(gpuX, linear)
+    func timed(_ variant: Bool) -> [Double] {
+        var times: [Double] = []
+        for _ in 0..<iterations {
+            let started = ContinuousClock.now
+            let output = variant
+                ? PrivateMLPKernels.affine(gpuX, weight: linear.weight, scales: linear.scales, biases: linear.biases!)
+                : linear(gpuX)
+            eval(output)
+            let duration = started.duration(to: .now).components
+            times.append(Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15)
+        }
+        return times
+    }
+    _ = timed(false)
+    _ = timed(true)
+    let stock = timed(false)
+    let variant = timed(true)
+    probeJSON(["probe": "gpu_stock", "in": inDim, "out": outDim, "seq": sequence,
+               "ms": stock, "median_ms": probeMedian(stock)])
+    probeJSON(["probe": "gpu_variant8", "in": inDim, "out": outDim, "seq": sequence,
+               "ms": variant, "median_ms": probeMedian(variant)])
+}
+
 do {
     if CommandLine.arguments.contains("--reference-server") { try await runReferenceServer() }
     else if CommandLine.arguments.contains("--gpu-projection-benchmark") { try PrivateMLPValidation.benchmarkProjections() }
+    else if CommandLine.arguments.contains("--ane-conv-probe") { try aneConvProbe() }
     else { try check() }
 }
 catch {

@@ -67,6 +67,11 @@ const dashboardCandidates = [
 const dashboardRoot = dashboardCandidates.find((candidate) => fs.existsSync(path.join(candidate, "index.html")))
   || dashboardCandidates.at(-1);
 
+let extensionLibraryCache = null;
+function invalidateExtensionLibraryCache() {
+  extensionLibraryCache = null;
+}
+
 class ServerEmbeddingRuntime {
   backend = null;
   profileId = "";
@@ -623,7 +628,9 @@ async function handler(request, response, embeddingRuntime, ingestTest, sourcePo
     }
     if (request.method === "POST" && parts[1] === "ingest" && parts[2]) {
       await withRequestOperation(request, response, async operation => {
-        json(response, 200, await ingest(parts[2], await body(request, operation.signal), loadConfig(), { signal: operation.signal }));
+        const result = await ingest(parts[2], await body(request, operation.signal), loadConfig(), { signal: operation.signal });
+        invalidateExtensionLibraryCache();
+        json(response, 200, result);
       });
       return;
     }
@@ -652,6 +659,12 @@ async function handler(request, response, embeddingRuntime, ingestTest, sourcePo
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/extension-library") {
+      const includeThumbnail = url.searchParams.get("includeThumbnail") === "true";
+      const now = Date.now();
+      if (extensionLibraryCache && now < extensionLibraryCache.expiresAt && extensionLibraryCache.hasThumbnails === includeThumbnail) {
+        json(response, 200, extensionLibraryCache.payload);
+        return;
+      }
       const data = await listVideos({ limit: 1000 });
       const videos = data.videos.map((video) => ({
         video_id: video.videoId,
@@ -659,7 +672,7 @@ async function handler(request, response, embeddingRuntime, ingestTest, sourcePo
         title: video.title,
         channel_name: video.channel,
         source_url: video.sourceUrl,
-        thumbnail_url: video.thumbnail,
+        thumbnail_url: includeThumbnail ? video.thumbnail : "",
         visual_count: video.visualCount,
         transcript_count: video.transcriptCount,
         saved_visual_segments: video.visualSegments,
@@ -668,14 +681,20 @@ async function handler(request, response, embeddingRuntime, ingestTest, sourcePo
         segment_interval: video.segmentInterval,
         last_indexed_at: video.indexedAt,
       }));
-      json(response, 200, {
+      const payload = {
         videos,
         video_count: videos.length,
         visual_count: videos.reduce((sum, item) => sum + item.visual_count, 0),
         transcript_count: videos.reduce((sum, item) => sum + item.transcript_count, 0),
         storage_provider: activeProfile().storage.provider,
         storage_label: activeProfile().storage.provider === "local" ? "本地 zvec" : "阿里云 OSS Vectors",
-      });
+      };
+      extensionLibraryCache = {
+        payload,
+        expiresAt: now + 15000,
+        hasThumbnails: includeThumbnail,
+      };
+      json(response, 200, payload);
       return;
     }
     if (request.method === "POST" && parts[1] === "videos" && parts[2] && parts[3] && parts[4] === "deletion-preview" && parts.length === 5) {
@@ -688,6 +707,7 @@ async function handler(request, response, embeddingRuntime, ingestTest, sourcePo
       const result = request.method === "DELETE"
         ? await deleteVideo(site, id, loadConfig(), await body(request))
         : await updateVideo(site, id, await body(request));
+      invalidateExtensionLibraryCache();
       json(response, 200, result);
       return;
     }

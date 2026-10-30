@@ -37,6 +37,7 @@ export const DEFAULT_CONFIG = {
     rootKinds: {},
     autoScan: true,
     scanIntervalSeconds: 900,
+    backgroundPacingMs: 250,
     maxAssetsPerScan: 400,
     // File discovery and embedding are separate budgets. Large libraries may
     // raise this without forcing every discovered file through the model.
@@ -81,6 +82,7 @@ export const DEFAULT_CONFIG = {
           maintenanceTimeoutSeconds: 600,
           autoRestart: true,
           maxRestarts: 3,
+          extraArgs: [] as string[],
         },
       },
       reranker: {
@@ -168,6 +170,7 @@ function normalizeLibrary(value: unknown) {
     rootKinds,
     autoScan: source.autoScan === undefined ? true : Boolean(source.autoScan),
     scanIntervalSeconds: wholeNumber(source.scanIntervalSeconds, DEFAULT_CONFIG.library.scanIntervalSeconds),
+    backgroundPacingMs: Math.max(0, Math.min(5000, wholeNumber(source.backgroundPacingMs, DEFAULT_CONFIG.library.backgroundPacingMs))),
     maxAssetsPerScan: wholeNumber(source.maxAssetsPerScan, DEFAULT_CONFIG.library.maxAssetsPerScan),
     maxFilesPerLibrary: wholeNumber(source.maxFilesPerLibrary, DEFAULT_CONFIG.library.maxFilesPerLibrary),
     kinds: fallbackKinds,
@@ -220,7 +223,8 @@ export function normalizeConfig(value = {}) {
     profile.embedding.native.executionModeIssue = appleExecutionModeIssue(sourceNative);
     if (!profile.embedding.native.executionModeIssue) {
       profile.embedding.native.mode = "fast";
-      profile.embedding.native.visionCompute = profile.embedding.native.executionMode === "a" ? "gpu" : "ane";
+      profile.embedding.native.visionCompute = profile.embedding.native.executionMode === "a" ? "gpu"
+        : (["c", "d"].includes(profile.embedding.native.executionMode) && sourceNative.visionCompute === "gpu" ? "gpu" : "ane");
       for (const key of ["decoderSegment", "decoderBundles", "decoderLoading", "decoderMinimumTokens"]) delete profile.embedding.native[key];
     }
     profile.embedding.native.privateANE ||= clone(DEFAULT_CONFIG.profiles.default.embedding.native.privateANE);
@@ -264,6 +268,11 @@ export function normalizeConfig(value = {}) {
     profile.embedding.native.maintenanceTimeoutSeconds = wholeNumber(profile.embedding.native.maintenanceTimeoutSeconds, 600);
     profile.embedding.native.autoRestart = profile.embedding.native.autoRestart !== false;
     profile.embedding.native.maxRestarts = Math.max(0, Math.floor(Number(profile.embedding.native.maxRestarts ?? 3)) || 0);
+    profile.embedding.native.extraArgs = Array.isArray(profile.embedding.native.extraArgs)
+      ? profile.embedding.native.extraArgs
+          .filter((item: unknown): item is string => typeof item === "string" && item.length > 0)
+          .slice(0, 16)
+      : [];
     profile.reranker.candidates = Number(profile.reranker.candidates || 20);
     profile.video = normalizeVideoProfile(source.video);
     if (profile.storage.provider === "oss-vectors") profile.storage.provider = "aliyun";

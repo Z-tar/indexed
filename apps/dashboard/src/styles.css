@@ -75,7 +75,33 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
 .asset-card-body strong { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-card-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
 .asset-kind { padding: 2px 7px; border-radius: 5px; background: #1c2028; color: #aab2c0; }
-.asset-origin { color: #8fd8b7; }
+.asset-origin { color: #8fd8b7; text-decoration: none; }
+.asset-origin.origin-bilibili { color: #23c0f8; background: rgba(0, 174, 236, 0.12); border: 1px solid rgba(0, 174, 236, 0.3); padding: 1px 6px; border-radius: 4px; }
+.asset-origin.origin-bilibili:hover { background: rgba(0, 174, 236, 0.25); color: #fff; }
+.asset-origin.origin-youtube { color: #ff5252; background: rgba(255, 0, 0, 0.12); border: 1px solid rgba(255, 0, 0, 0.3); padding: 1px 6px; border-radius: 4px; }
+.asset-origin.origin-youtube:hover { background: rgba(255, 0, 0, 0.25); color: #fff; }
+.asset-card-poster-wrap { position: relative; overflow: hidden; width: 100%; aspect-ratio: 16 / 10; background: #07080b; }
+.asset-card-poster-wrap img { width: 100%; height: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+.group-segment-pill { position: absolute; top: 8px; right: 8px; background: rgba(17, 19, 25, 0.85); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.16); color: #e2e8f0; font-size: 10.5px; font-weight: 550; padding: 2px 7px; border-radius: 999px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4); pointer-events: none; }
+.timeline-chips-wrap { margin: 4px 0 2px; }
+.timeline-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.timeline-chip { padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); color: #c9cfda; font-size: 11px; font-family: ui-monospace, Menlo, monospace; cursor: pointer; transition: all 0.15s ease; }
+.timeline-chip:hover { background: rgba(118, 103, 237, 0.25); border-color: #6b5bd8; color: #fff; transform: translateY(-1px); }
+.timeline-chip.is-best { border-color: rgba(98, 222, 177, 0.5); background: rgba(98, 222, 177, 0.14); color: #62deb1; font-weight: 600; }
+.timeline-chip-toggle { padding: 2px 6px; border-radius: 5px; border: 1px dashed rgba(255, 255, 255, 0.2); background: transparent; color: var(--muted); font-size: 10.5px; cursor: pointer; transition: all 0.15s ease; }
+.timeline-chip-toggle:hover { color: #fff; border-color: #aab2c0; background: rgba(255, 255, 255, 0.08); }
+.segments-drawer { border-top: 1px solid var(--line); background: rgba(14, 16, 21, 0.95); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow-y: auto; }
+.segments-drawer-head { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.segments-drawer-list { display: flex; flex-direction: column; gap: 4px; }
+.drawer-segment-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; transition: background 0.12s; }
+.drawer-segment-row:hover { background: rgba(255, 255, 255, 0.08); }
+.drawer-segment-row.is-best { background: rgba(98, 222, 177, 0.06); }
+.drawer-time { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #62deb1; flex-shrink: 0; }
+.drawer-site { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); color: var(--muted); flex-shrink: 0; }
+.drawer-site.bilibili { color: #23c0f8; background: rgba(0, 174, 236, 0.1); }
+.drawer-site.youtube { color: #ff5252; background: rgba(255, 0, 0, 0.1); }
+.drawer-snippet { margin: 0; font-size: 11.5px; color: #98a0af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.drawer-segment-row:hover .drawer-snippet { color: #fff; }
 .asset-score { margin-left: auto; font-family: ui-monospace, Menlo, monospace; }
 .asset-sidecar { margin: 0; color: #98a0af; font-size: 11.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .asset-sidecar em { grid-column: 1; margin-right: 6px; color: var(--violet); font-style: normal; }

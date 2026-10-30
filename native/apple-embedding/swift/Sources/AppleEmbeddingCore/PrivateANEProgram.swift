@@ -111,37 +111,122 @@ public final class PrivateANEProgram: @unchecked Sendable {
             throw ServiceError.invalidRequest("Private ANE activation shape differs from its output")
         }
         return try withEvaluation(updating: [0: input], cancellation: cancellation, outputStage: "surface_activation", lane: lane) {
-            var error = [CChar](repeating: 0, count: 4096)
-            guard let pointer = indexed_ane_lock_output(handle, 0, outputElements[0] * MemoryLayout<Float16>.stride, &error, error.count) else {
-                throw ServiceError.model(Self.message(error))
+            try borrowActivation(rows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden, cancellation: cancellation) { borrowed in
+                PrivateMLPKernels.activation(borrowed, gpu: gpu, rows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden)
             }
-            defer { indexed_ane_unlock_output(handle, 0) }
-            if workspace.outputArray == nil {
-                guard let surface = indexed_ane_retain_output_surface(handle, 0) else {
-                    throw ServiceError.model("Private ANE output storage unavailable")
-                }
-                // Retain only storage, not this program: caching an array whose
-                // destructor owns the program would form a workspace cycle.
-                // Cmlx also avoids 0.31.4's retained Swift finalizer-box leak.
-                workspace.outputArray = MLXArray(mlx_array_new_data_managed_payload(
-                    pointer, [Int32(outputElements[0])], 1, MLX_FLOAT16, surface,
-                    { payload in indexed_ane_release_surface(payload) }))
-                // Cmlx can fall back to copying an unwrappable allocation.
-                // A cached copy would become stale on the next ANE evaluation.
-                let aliasesSurface = workspace.outputArray!.asData(access: .noCopy).data.withUnsafeBytes {
-                    $0.baseAddress == UnsafeRawPointer(pointer)
-                }
-                guard aliasesSurface else {
-                    workspace.outputArray = nil
-                    throw ServiceError.model("Private ANE output cannot be mapped without copying")
-                }
+        }
+    }
+
+    /// Packed fast path: writes an already-materialized contiguous FP16 array
+    /// straight into the input surface, skipping the intermediate [Float16]
+    /// allocation and its full extra copy (multiple 8.6MB arrays per request).
+    func evaluateActivationPacked(_ packed: MLXArray, gpu: MLXArray, rows: Int,
+                                  aneHidden: Int, gpuHidden: Int, cancellation: CancellationToken,
+                                  lane: InferenceGate?) throws -> MLXArray {
+        guard inputElements.count == 1, outputElements == [2 * aneHidden * rows] else {
+            throw ServiceError.invalidRequest("Private ANE activation shape differs from its output")
+        }
+        return try withPackedEvaluation(packed: packed, cancellation: cancellation, outputStage: "surface_activation", lane: lane) {
+            try borrowActivation(rows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden, cancellation: cancellation) { borrowed in
+                PrivateMLPKernels.activation(borrowed, gpu: gpu, rows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden)
             }
-            let borrowed = workspace.outputArray!
-            let activation = PrivateMLPKernels.activation(borrowed, gpu: gpu,
-                rows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden)
-            eval(activation)
+        }
+    }
+
+    /// Zero-copy suffix fast path: accepts split gate/up GPU suffix projections
+    /// directly without materializing a concatenated gpuWeight tensor per layer,
+    /// and merges only `validRows` (`<= rows`) when evaluating a padded tail block.
+    func evaluateActivationPacked(_ packed: MLXArray, gpuGate: MLXArray, gpuUp: MLXArray,
+                                  validRows: Int? = nil, rows: Int,
+                                  aneHidden: Int, gpuHidden: Int, cancellation: CancellationToken,
+                                  lane: InferenceGate?) throws -> MLXArray {
+        let activeRows = validRows ?? rows
+        guard inputElements.count == 1, outputElements == [2 * aneHidden * rows],
+              activeRows > 0, activeRows <= rows else {
+            throw ServiceError.invalidRequest("Private ANE activation shape differs from its output")
+        }
+        return try withPackedEvaluation(packed: packed, cancellation: cancellation, outputStage: "surface_activation", lane: lane) {
+            try borrowActivation(rows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden, cancellation: cancellation) { borrowed in
+                PrivateMLPKernels.activation(borrowed, gpuGate: gpuGate, gpuUp: gpuUp,
+                    validRows: activeRows, aneRows: rows, aneHidden: aneHidden, gpuHidden: gpuHidden)
+            }
+        }
+    }
+
+    private func borrowActivation(rows: Int, aneHidden: Int, gpuHidden: Int,
+                                  cancellation: CancellationToken,
+                                  merge: (MLXArray) -> MLXArray) throws -> MLXArray {
+        var error = [CChar](repeating: 0, count: 4096)
+        guard let pointer = indexed_ane_lock_output(handle, 0, outputElements[0] * MemoryLayout<Float16>.stride, &error, error.count) else {
+            throw ServiceError.model(Self.message(error))
+        }
+        defer { indexed_ane_unlock_output(handle, 0) }
+        if workspace.outputArray == nil {
+            guard let surface = indexed_ane_retain_output_surface(handle, 0) else {
+                throw ServiceError.model("Private ANE output storage unavailable")
+            }
+            // Retain only storage, not this program: caching an array whose
+            // destructor owns the program would form a workspace cycle.
+            // Cmlx also avoids 0.31.4's retained Swift finalizer-box leak.
+            workspace.outputArray = MLXArray(mlx_array_new_data_managed_payload(
+                pointer, [Int32(outputElements[0])], 1, MLX_FLOAT16, surface,
+                { payload in indexed_ane_release_surface(payload) }))
+            // Cmlx can fall back to copying an unwrappable allocation.
+            // A cached copy would become stale on the next ANE evaluation.
+            let aliasesSurface = workspace.outputArray!.asData(access: .noCopy).data.withUnsafeBytes {
+                $0.baseAddress == UnsafeRawPointer(pointer)
+            }
+            guard aliasesSurface else {
+                workspace.outputArray = nil
+                throw ServiceError.model("Private ANE output cannot be mapped without copying")
+            }
+        }
+        let borrowed = workspace.outputArray!
+        let activation = merge(borrowed)
+        eval(activation)
+        try cancellation.check()
+        return activation
+    }
+
+    /// Same staging contract as withEvaluation, but the single input comes
+    /// from an evaluated contiguous MLXArray and is copied once, surface-bound.
+    private func withPackedEvaluation<T>(packed: MLXArray, cancellation: CancellationToken,
+                                         outputStage: String, lane: InferenceGate? = nil, consume: () throws -> T) throws -> T {
+        try lock.withLock {
             try cancellation.check()
-            return activation
+            guard inputElements.indices.contains(0), inputElements[0] == packed.size,
+                  packed.dtype == .float16 else {
+                throw ServiceError.invalidRequest("Packed private ANE input does not match its compiled shape")
+            }
+            var error = [CChar](repeating: 0, count: 4096)
+            func milliseconds(_ start: ContinuousClock.Instant, _ end: ContinuousClock.Instant) -> Double {
+                let duration = start.duration(to: end).components
+                return Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15
+            }
+            let writeStarted = ContinuousClock.now
+            let data = packed.asData(access: .noCopy)
+            let written = data.data.withUnsafeBytes { raw in
+                indexed_ane_write(handle, 0, raw.baseAddress, raw.count, &error, error.count)
+            }
+            guard written else { throw ServiceError.model(Self.message(error)) }
+            initializedInputs.insert(0)
+            let evaluateStarted = ContinuousClock.now
+            var nativeStarted = evaluateStarted
+            let evaluate = {
+                nativeStarted = .now
+                guard indexed_ane_evaluate(self.handle, &error, error.count) else { throw ServiceError.model(Self.message(error)) }
+            }
+            if let lane { try lane.withPermit(priority: true, cancellation: cancellation, evaluate) }
+            else { try evaluate() }
+            let readStarted = ContinuousClock.now
+            evaluationCount += 1
+            try cancellation.check()
+            let result = try consume()
+            lastStages = ["surface_write": milliseconds(writeStarted, evaluateStarted),
+                          "lane_wait": milliseconds(evaluateStarted, nativeStarted),
+                          "ane_call": milliseconds(nativeStarted, readStarted),
+                          outputStage: milliseconds(readStarted, .now)]
+            return result
         }
     }
 
@@ -223,6 +308,32 @@ public struct PrivateANELinearWeights {
             tensor<int8, [\(outputDimension), \(inputDimension), 1, 1]> wd = const()[name=string("wd"), val=tensor<int8, [\(outputDimension), \(inputDimension), 1, 1]>(BLOBFILE(path=string("@model_path/weights/weight_data.bin"), offset=uint64(64)))];
             tensor<fp16, [\(outputDimension), 1, 1, 1]> ws = const()[name=string("ws"), val=tensor<fp16, [\(outputDimension), 1, 1, 1]>(BLOBFILE(path=string("@model_path/weights/weight_scale.bin"), offset=uint64(64)))];
             tensor<fp16, [\(outputDimension), \(inputDimension), 1, 1]> w = constexpr_blockwise_shift_scale(data=wd, scale=ws)[name=string("dequant")];
+            string pt = const()[name=string("pt"), val=string("valid")];
+            tensor<int32, [2]> st = const()[name=string("st"), val=tensor<int32, [2]>([1,1])];
+            tensor<int32, [4]> pd = const()[name=string("pd"), val=tensor<int32, [4]>([0,0,0,0])];
+            tensor<int32, [2]> dl = const()[name=string("dl"), val=tensor<int32, [2]>([1,1])];
+            int32 gr = const()[name=string("gr"), val=int32(1)];
+            tensor<fp16, [1, \(outputDimension), 1, \(sequenceLength)]> y = conv(dilations=dl, groups=gr, pad=pd, pad_type=pt, strides=st, weight=w, x=x)[name=string("conv")];
+          } -> (y);
+        }
+        """
+    }
+
+    /// Pre-dequantized FP16 flavor for pre-H16 ANE compilers (M1-M3
+    /// generation), whose MIL rejects constexpr int8 dequantization ops.
+    /// Same conv and blob layout as the int8 flavor; weights arrive as raw
+    /// FP16 bytes and no scale blob is referenced.
+    public static func milFP16(inputDimension: Int, outputDimension: Int, sequenceLength: Int) throws -> String {
+        guard inputDimension > 0, inputDimension <= 32768, outputDimension > 0, outputDimension <= 32768,
+              sequenceLength >= 64, sequenceLength <= 8192, sequenceLength.isMultiple(of: 64) else {
+            throw ServiceError.invalidRequest("Invalid private ANE linear shape")
+        }
+        return """
+        program(1.3)
+        [buildInfo = dict<string, string>({{"coremlc-component-MIL", "3510.2.1"}, {"coremlc-version", "3505.4.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+        {
+          func main<ios18>(tensor<fp16, [1, \(inputDimension), 1, \(sequenceLength)]> x) {
+            tensor<fp16, [\(outputDimension), \(inputDimension), 1, 1]> w = const()[name=string("w"), val=tensor<fp16, [\(outputDimension), \(inputDimension), 1, 1]>(BLOBFILE(path=string("@model_path/weights/weight_data.bin"), offset=uint64(64)))];
             string pt = const()[name=string("pt"), val=string("valid")];
             tensor<int32, [2]> st = const()[name=string("st"), val=tensor<int32, [2]>([1,1])];
             tensor<int32, [4]> pd = const()[name=string("pd"), val=tensor<int32, [4]>([0,0,0,0])];

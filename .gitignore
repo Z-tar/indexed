@@ -53,3 +53,4 @@ secrets.json
 /native/apple-embedding/inspect_coreml_compute_plan.swift
 /native/apple-embedding/omlx-short-sequence.patch
 /tests/native-reference-tools.test.ts
+.history/

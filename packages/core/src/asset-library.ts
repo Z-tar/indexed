@@ -307,7 +307,7 @@ interface AssetContext {
   direct: DirectConfig;
   space: string;
   roots: string[];
-  settings: { autoScan: boolean; scanIntervalSeconds: number; maxAssetsPerScan: number; maxFilesPerLibrary: number; kinds: AssetKind[] };
+  settings: { autoScan: boolean; scanIntervalSeconds: number; backgroundPacingMs: number; maxAssetsPerScan: number; maxFilesPerLibrary: number; kinds: AssetKind[] };
 }
 
 function normalizedAssetKinds(value: unknown, fallback: AssetKind[] = ASSET_KIND_ORDER): AssetKind[] {
@@ -328,6 +328,7 @@ function librarySettings(config: ReturnType<typeof loadConfig>) {
   return {
     autoScan: library.autoScan === undefined ? true : Boolean(library.autoScan),
     scanIntervalSeconds: Number(library.scanIntervalSeconds || 900),
+    backgroundPacingMs: Math.max(0, Math.min(5000, Math.floor(Number(library.backgroundPacingMs ?? 250) || 0))),
     maxAssetsPerScan: Number(library.maxAssetsPerScan || 400),
     maxFilesPerLibrary: Math.max(1, Math.floor(Number(library.maxFilesPerLibrary || DEFAULT_MAX_FILES_PER_LIBRARY))),
     kinds: kinds.length ? kinds : [...ASSET_KIND_ORDER],
@@ -1030,6 +1031,21 @@ export async function scanLibrary(root: string, options: ScanOptions = {}): Prom
       job.currentUnitStartedAt = 0;
       job.remaining = Math.max(result.remaining, pending.length - job.done);
       report();
+      // Power-first pacing: background scans may trade wall time for lower
+      // sustained SoC power by resting between files (abort-aware).
+      if (options.background === true && job.done < job.total) {
+        const pacing = Math.max(0, Math.min(5000, Math.floor(Number(ctx.settings.backgroundPacingMs ?? 250) || 0)));
+        if (pacing > 0 && !options.signal?.aborted) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              options.signal?.removeEventListener("abort", whenAborted);
+              resolve();
+            }, pacing);
+            const whenAborted = () => { clearTimeout(timer); resolve(); };
+            options.signal?.addEventListener("abort", whenAborted, { once: true });
+          });
+        }
+      }
     }, options.signal);
     return result;
   }, (timings) => { job.storageTimings = timings; });

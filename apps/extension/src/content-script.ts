@@ -2,7 +2,7 @@
 import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
 (() => {
-  const CONTENT_SCRIPT_VERSION = "0.14.6";
+  const CONTENT_SCRIPT_VERSION = "0.14.7";
   if (globalThis.__sceneMemoryContentScriptLoaded === CONTENT_SCRIPT_VERSION) return;
   globalThis.__sceneMemoryContentScriptLoaded = CONTENT_SCRIPT_VERSION;
 
@@ -217,7 +217,14 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      void setCurrentVideoEnabled(!runtime.optedIn, { retainPreview: runtime.retainPreview });
+      const nextOptedIn = !runtime.optedIn;
+      runtime.optedIn = nextOptedIn;
+      if (nextOptedIn) runtime.running = true;
+      updateFloatingButton();
+      void setCurrentVideoEnabled(nextOptedIn, { retainPreview: runtime.retainPreview }).catch((error) => {
+        runtime.lastError = String(error?.message || error);
+        updateFloatingButton();
+      });
     });
     shadow.append(style, button);
     slot.container.insertBefore(host, slot.anchor || null);
@@ -665,8 +672,8 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     runtime.lastError = "";
     ensureTimer();
     updateFloatingButton();
-    await tick();
-    await syncVideoSession(true);
+    void tick();
+    void syncVideoSession(true);
     return publicState();
   }
 
@@ -675,20 +682,21 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     await finalizeActiveSegment("manual_stop");
     runtime.activeIdentity = "";
     updateFloatingButton();
-    await syncVideoSession(true);
+    void syncVideoSession(true);
     return publicState();
   }
 
   async function setCurrentVideoEnabled(enabled, options = {}) {
     const identity = currentVideoIdentity();
     if (!identity) return publicState();
+    runtime.optedIn = Boolean(enabled);
+    updateFloatingButton();
     const stored = await extensionStorageGet({ [VIDEO_OPT_INS_KEY]: {} });
     if (!stored) return publicState();
     const optIns = { ...(stored[VIDEO_OPT_INS_KEY] || {}) };
     if (enabled) optIns[identity] = true;
     else delete optIns[identity];
     await chrome.storage.local.set({ [VIDEO_OPT_INS_KEY]: optIns, autoIndexWatched: false });
-    runtime.optedIn = Boolean(enabled);
     runtime.lastError = "";
     if (enabled) {
       await send({ type: "SET_PROCESSING_PAUSED", paused: false });
@@ -697,7 +705,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
       await stop();
     }
     updateFloatingButton();
-    await syncVideoSession(true);
+    void syncVideoSession(true);
     return publicState();
   }
 

@@ -882,4 +882,4 @@ elements["history-toggle"].addEventListener("click", () => {
 });
 elements["save-settings"].addEventListener("click", () => void saveSettings());
 elements["reset-memory"].addEventListener("click", () => void resetVideoMemory());
-void initialize().then(() => window.setInterval(() => void refreshProgress(), 3000));
+void initialize().then(() => window.setInterval(() => void refreshProgress(), 5000));

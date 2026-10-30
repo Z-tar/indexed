@@ -160,9 +160,8 @@ public final class MLXWeMMEngine: EmbeddingEngine, @unchecked Sendable {
         developmentGDNProfile: Data? = nil,
         developmentPipelineDepth: Int = 1
     ) async throws -> MLXWeMMEngine {
-        guard (1...2).contains(developmentPipelineDepth),
-              developmentPipelineDepth == 1 || developmentPrivateMLP != nil else {
-            throw ServiceError.invalidRequest("Pipeline depth 2 requires an explicit private candidate")
+        guard (1...2).contains(developmentPipelineDepth) else {
+            throw ServiceError.invalidRequest("Pipeline depth must be 1 or 2")
         }
         let pipeline = InferencePipeline(depth: developmentPipelineDepth)
         if developmentPrivateMLP != nil,

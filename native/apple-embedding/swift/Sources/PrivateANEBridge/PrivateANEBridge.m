@@ -25,6 +25,7 @@ static void fail(char *buffer, size_t capacity, NSString *message) {
 @property(nonatomic, strong) NSArray<NSNumber *> *inputSizes;
 @property(nonatomic, strong) NSArray<NSNumber *> *outputSizes;
 @property(nonatomic, copy) NSString *directory;
+@property(nonatomic, copy) NSString *lockPath;
 @property(nonatomic) int lockFD;
 @property(nonatomic) BOOL loaded;
 @property(nonatomic) BOOL failed;
@@ -41,7 +42,11 @@ static void fail(char *buffer, size_t capacity, NSString *message) {
         ((BOOL (*)(id, SEL, unsigned int, NSError **))objc_msgSend)(_model, @selector(unloadWithQoS:error:), 21, &error);
     }
     if (_directory) [[NSFileManager defaultManager] removeItemAtPath:_directory error:nil];
-    if (_lockFD >= 0) { flock(_lockFD, LOCK_UN); close(_lockFD); }
+    if (_lockFD >= 0) {
+        if (_lockPath) unlink(_lockPath.fileSystemRepresentation);
+        flock(_lockFD, LOCK_UN);
+        close(_lockFD);
+    }
 }
 @end
 
@@ -130,9 +135,19 @@ IndexedANEProgram *indexed_ane_create_sharing(
         NSString *lockPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"indexed-ane-" stringByAppendingString:identifier]];
         owner.lockFD = open(lockPath.fileSystemRepresentation, O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
         if (owner.lockFD < 0 || flock(owner.lockFD, LOCK_EX | LOCK_NB) != 0) { fail(error, error_capacity, @"Private ANE program is already owned by another process"); return NULL; }
+        owner.lockPath = lockPath;
         NSFileManager *manager = NSFileManager.defaultManager;
-        // Do not delete a pre-existing staging directory owned by another implementation.
-        if ([manager fileExistsAtPath:directory]) { fail(error, error_capacity, @"Private ANE staging directory already exists"); return NULL; }
+        // If we hold the exclusive lock and a staging directory with ANE artifacts
+        // still exists on disk, reclaim it from a prior crashed/SIGKILLed helper.
+        if ([manager fileExistsAtPath:directory]) {
+            NSString *staleMil = [directory stringByAppendingPathComponent:@"model.mil"];
+            NSString *staleWeights = [directory stringByAppendingPathComponent:@"weights"];
+            if ([manager fileExistsAtPath:staleMil] || [manager fileExistsAtPath:staleWeights]) {
+                [manager removeItemAtPath:directory error:nil];
+            } else {
+                fail(error, error_capacity, @"Private ANE staging directory already exists"); return NULL;
+            }
+        }
         NSError *nativeError = nil;
         if (![manager createDirectoryAtPath:[directory stringByAppendingPathComponent:@"weights"] withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0700} error:&nativeError]) {
             fail(error, error_capacity, nativeError.localizedDescription); return NULL;

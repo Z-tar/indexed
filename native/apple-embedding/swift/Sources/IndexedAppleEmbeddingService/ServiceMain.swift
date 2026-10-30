@@ -22,6 +22,7 @@ private func usage() -> Never {
             [--vision-compute ane|gpu]
             [--language-compute gpu]
             [--max-queued-requests 16] [--auth-token TOKEN]
+            [--pipeline-depth 1|2]
             [--skip-warmup] [--development-deterministic-engine]
 
         """,
@@ -98,7 +99,10 @@ private enum ServiceMain {
         let defaultDimension = Int(argument("--default-dimension", in: arguments) ?? "2048") ?? 2048
         let selectedMode = argument("--execution-mode", in: arguments)?.lowercased()
         let selectedVision = selectedMode == "a" ? "gpu" : "ane"
-        if let explicit = argument("--vision-compute", in: arguments), selectedMode != nil, explicit != selectedVision {
+        if let explicit = argument("--vision-compute", in: arguments), selectedMode != nil, explicit != selectedVision,
+            !(["c", "d"].contains(selectedMode!) && ["ane", "gpu"].contains(explicit)) {
+            // C/D are experimental candidates: allow a GPU vision override for
+            // hosts whose Core ML ANE vision path underperforms (M3 family).
             throw ServiceError.invalidRequest("--execution-mode 与 --vision-compute 冲突")
         }
         guard let visionComputeTarget = VisionComputeTarget(

@@ -68,6 +68,9 @@ function queryVectors(indexName, vector, direct, options = {}) {
 
 async function testStorage(direct) {
   if (!usesLocalStorage(direct)) return testCloudConfig(direct);
+  if (direct.embeddingProvider === "apple-native" && !direct.embeddingBaseUrl) {
+    throw new Error("Apple 原生推理后端尚未就绪或已异常退出，请检查本地运行时状态");
+  }
   const [embedding, storage] = await Promise.all([
     testEmbeddingConfig(direct),
     localVectorStatus(direct),

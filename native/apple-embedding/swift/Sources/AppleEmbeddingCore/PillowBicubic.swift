@@ -12,12 +12,20 @@ enum PillowBicubic {
     private static let coefficientScale = 1 << precisionBits
     private static let rounding = 1 << (precisionBits - 1)
 
+    private struct CacheKey: Hashable {
+        let input: Int
+        let output: Int
+    }
+
     private struct Coefficients {
         let starts: [Int]
         let counts: [Int]
         let kernelSize: Int
         let values: [Int32]
     }
+
+    private static let cacheLock = NSLock()
+    private nonisolated(unsafe) static var coefficientCache: [CacheKey: Coefficients] = [:]
 
     static func resizeRGBA(
         _ source: [UInt8],
@@ -27,48 +35,114 @@ enum PillowBicubic {
         _ targetHeight: Int
     ) -> [UInt8] {
         precondition(source.count == sourceWidth * sourceHeight * 4)
-        let horizontal = coefficients(input: sourceWidth, output: targetWidth)
-        let vertical = coefficients(input: sourceHeight, output: targetHeight)
+        let horizontal = cachedCoefficients(input: sourceWidth, output: targetWidth)
+        let vertical = cachedCoefficients(input: sourceHeight, output: targetHeight)
 
         var intermediate = [UInt8](
             repeating: 255,
             count: targetWidth * sourceHeight * 4
         )
-        for y in 0 ..< sourceHeight {
-            for x in 0 ..< targetWidth {
-                let start = horizontal.starts[x]
-                let count = horizontal.counts[x]
-                let kernelOffset = x * horizontal.kernelSize
-                let destination = (y * targetWidth + x) * 4
-                for channel in 0 ..< 3 {
-                    var sum = rounding
-                    for tap in 0 ..< count {
-                        let value = Int(source[(y * sourceWidth + start + tap) * 4 + channel])
-                        sum += value * Int(horizontal.values[kernelOffset + tap])
+        source.withUnsafeBufferPointer { srcBuf in
+            intermediate.withUnsafeMutableBufferPointer { interBuf in
+                horizontal.starts.withUnsafeBufferPointer { startsBuf in
+                    horizontal.counts.withUnsafeBufferPointer { countsBuf in
+                        horizontal.values.withUnsafeBufferPointer { valuesBuf in
+                            let src = srcBuf.baseAddress!
+                            let inter = interBuf.baseAddress!
+                            let starts = startsBuf.baseAddress!
+                            let counts = countsBuf.baseAddress!
+                            let values = valuesBuf.baseAddress!
+                            let kSize = horizontal.kernelSize
+                            for y in 0 ..< sourceHeight {
+                                let rowSrcBase = y * sourceWidth * 4
+                                let rowDstBase = y * targetWidth * 4
+                                for x in 0 ..< targetWidth {
+                                    let start = starts[x]
+                                    let count = counts[x]
+                                    let kernelOffset = x * kSize
+                                    let destination = rowDstBase + x * 4
+                                    let srcOffset = rowSrcBase + start * 4
+                                    var sum0 = rounding
+                                    var sum1 = rounding
+                                    var sum2 = rounding
+                                    for tap in 0 ..< count {
+                                        let coeff = Int(values[kernelOffset + tap])
+                                        let px = srcOffset + tap * 4
+                                        sum0 += Int(src[px]) * coeff
+                                        sum1 += Int(src[px + 1]) * coeff
+                                        sum2 += Int(src[px + 2]) * coeff
+                                    }
+                                    inter[destination] = clipped(sum0 >> precisionBits)
+                                    inter[destination + 1] = clipped(sum1 >> precisionBits)
+                                    inter[destination + 2] = clipped(sum2 >> precisionBits)
+                                }
+                            }
+                        }
                     }
-                    intermediate[destination + channel] = clipped(sum >> precisionBits)
                 }
             }
         }
 
         var output = [UInt8](repeating: 255, count: targetWidth * targetHeight * 4)
-        for y in 0 ..< targetHeight {
-            let start = vertical.starts[y]
-            let count = vertical.counts[y]
-            let kernelOffset = y * vertical.kernelSize
-            for x in 0 ..< targetWidth {
-                let destination = (y * targetWidth + x) * 4
-                for channel in 0 ..< 3 {
-                    var sum = rounding
-                    for tap in 0 ..< count {
-                        let value = Int(intermediate[((start + tap) * targetWidth + x) * 4 + channel])
-                        sum += value * Int(vertical.values[kernelOffset + tap])
+        intermediate.withUnsafeBufferPointer { interBuf in
+            output.withUnsafeMutableBufferPointer { outBuf in
+                vertical.starts.withUnsafeBufferPointer { startsBuf in
+                    vertical.counts.withUnsafeBufferPointer { countsBuf in
+                        vertical.values.withUnsafeBufferPointer { valuesBuf in
+                            let inter = interBuf.baseAddress!
+                            let out = outBuf.baseAddress!
+                            let starts = startsBuf.baseAddress!
+                            let counts = countsBuf.baseAddress!
+                            let values = valuesBuf.baseAddress!
+                            let kSize = vertical.kernelSize
+                            let rowStride = targetWidth * 4
+                            for y in 0 ..< targetHeight {
+                                let start = starts[y]
+                                let count = counts[y]
+                                let kernelOffset = y * kSize
+                                let rowDstBase = y * rowStride
+                                for x in 0 ..< targetWidth {
+                                    let destination = rowDstBase + x * 4
+                                    let colBase = start * rowStride + x * 4
+                                    var sum0 = rounding
+                                    var sum1 = rounding
+                                    var sum2 = rounding
+                                    for tap in 0 ..< count {
+                                        let coeff = Int(values[kernelOffset + tap])
+                                        let px = colBase + tap * rowStride
+                                        sum0 += Int(inter[px]) * coeff
+                                        sum1 += Int(inter[px + 1]) * coeff
+                                        sum2 += Int(inter[px + 2]) * coeff
+                                    }
+                                    out[destination] = clipped(sum0 >> precisionBits)
+                                    out[destination + 1] = clipped(sum1 >> precisionBits)
+                                    out[destination + 2] = clipped(sum2 >> precisionBits)
+                                }
+                            }
+                        }
                     }
-                    output[destination + channel] = clipped(sum >> precisionBits)
                 }
             }
         }
         return output
+    }
+
+    private static func cachedCoefficients(input: Int, output: Int) -> Coefficients {
+        let key = CacheKey(input: input, output: output)
+        cacheLock.lock()
+        if let cached = coefficientCache[key] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        let computed = coefficients(input: input, output: output)
+        cacheLock.lock()
+        if coefficientCache.count >= 32 {
+            coefficientCache.removeAll(keepingCapacity: true)
+        }
+        coefficientCache[key] = computed
+        cacheLock.unlock()
+        return computed
     }
 
     private static func coefficients(input: Int, output: Int) -> Coefficients {

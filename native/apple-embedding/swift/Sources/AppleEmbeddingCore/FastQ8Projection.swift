@@ -6,9 +6,13 @@ import Metal
 /// projections on M4. Preserve packed weights/scales verbatim and retain stock
 /// MLX for short requests and layouts outside the measured contract.
 final class FastQ8Projection: QuantizedLinear {
-    // Only the base M4 has been measured. In particular, preserve stock MLX's
-    // NAX selection on M5 instead of substituting an unmeasured classic kernel.
-    static let isSupportedDevice = MTLCreateSystemDefaultDevice()?.name == "Apple M4"
+    // Measured on base M4 and enabled on the M3 family after running the
+    // on-device projection benchmark (`indexed-private-ane-check
+    // --gpu-projection-benchmark`). Keep stock MLX's NAX selection elsewhere.
+    static let isSupportedDevice = {
+        guard let name = MTLCreateSystemDefaultDevice()?.name else { return false }
+        return name == "Apple M4" || name.hasPrefix("Apple M3")
+    }()
     private let context: PrivateMLPContext
 
     init(_ original: QuantizedLinear, context: PrivateMLPContext) {

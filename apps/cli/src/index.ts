@@ -37,7 +37,7 @@ function values(flag) {
   return args.flatMap((item, index) => item === flag && args[index + 1] !== undefined ? [String(args[index + 1])] : []);
 }
 
-const BOOLEAN_FLAGS = new Set(["--activate", "--confirm", "--no-auto-restart", "--no-legacy", "--dry-run", "--full", "--include-missing", "--no-scan", "--open", "--private-ane-verify-reference", "--purge", "--raw", "--yes"]);
+const BOOLEAN_FLAGS = new Set(["--activate", "--confirm", "--no-auto-restart", "--no-legacy", "--dry-run", "--full", "--include-missing", "--json", "--no-scan", "--open", "--private-ane-verify-reference", "--purge", "--raw", "--yes"]);
 
 function positional() {
   const values = [];
@@ -428,7 +428,213 @@ function commandNeedsEmbeddingBackend() {
   return false;
 }
 
+function getDaemonBaseUrl() {
+  try {
+    const config = loadConfig();
+    const rawHost = config.server?.host || "127.0.0.1";
+    const host = rawHost === "0.0.0.0" ? "127.0.0.1" : rawHost;
+    const port = config.server?.port || 18767;
+    return `http://${host}:${port}`;
+  } catch {
+    return "http://127.0.0.1:18767";
+  }
+}
+
+async function probeDaemon(baseUrl = getDaemonBaseUrl(), timeoutMs = 250) {
+  try {
+    const res = await fetch(`${baseUrl}/api/embedding-backend`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) return await res.json();
+  } catch (error) {
+    const code = error?.code || error?.cause?.code;
+    if (code === "ECONNREFUSED") return null;
+  }
+  try {
+    const res = await fetch(`${baseUrl}/api/status`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) return await res.json();
+  } catch (error) {
+    const code = error?.code || error?.cause?.code;
+    if (code === "ECONNREFUSED") return null;
+  }
+  return null;
+}
+
+function formatHumanStatus(statusData, backendData, daemonBase) {
+  const lines = [];
+  lines.push("==================================================");
+  lines.push("           Indexed System Status                  ");
+  lines.push("==================================================");
+  lines.push(`Server Daemon      : Active (${daemonBase})`);
+  lines.push(`Active Profile     : ${statusData?.activeProfile || "default"} (${statusData?.label || "Default"})`);
+
+  const storage = statusData?.storage || {};
+  lines.push(`Storage Backend    : ${storage.provider_label || storage.provider || statusData?.storageProvider || "local"}`);
+  if (storage.path) lines.push(`Storage Path       : ${storage.path}`);
+
+  if (Array.isArray(storage.collections) && storage.collections.length > 0) {
+    const totalVecs = storage.collections.reduce((sum, c) => sum + (c.count || 0), 0);
+    lines.push(`Total Vectors      : ${totalVecs.toLocaleString()}`);
+    for (const c of storage.collections) {
+      let label = c.name;
+      if (c.name.includes("video_visual")) label = "Visual Vectors";
+      else if (c.name.includes("video_transcript")) label = "Transcript Vectors";
+      else if (c.name.includes("library_assets")) label = "Asset Vectors";
+      lines.push(`  - ${label.padEnd(20)}: ${(c.count || 0).toLocaleString()}`);
+    }
+  }
+
+  const reranker = statusData?.reranker || {};
+  const rerankerStr = reranker.ok ? (reranker.enabled ? "OK (enabled)" : "OK (disabled)") : (reranker.ok === undefined ? "(unprobed)" : "Unavailable");
+  const visualReachable = statusData?.visualReachable === undefined ? "(unprobed)" : (statusData.visualReachable ? "OK" : "No");
+  const transcriptReachable = statusData?.transcriptReachable === undefined ? "(unprobed)" : (statusData.transcriptReachable ? "OK" : "No");
+  lines.push(`Reachability       : Visual: ${visualReachable}, Transcript: ${transcriptReachable}, Reranker: ${rerankerStr}`);
+
+  lines.push("");
+  lines.push(`Embedding Engine   : ${statusData?.embeddingProvider || "apple-native"} (${statusData?.embeddingModel || "wemm-embedding-2b-apple-2048"}, dim: ${statusData?.embeddingDimension || 2048})`);
+
+  if (backendData) {
+    const health = backendData.health || {};
+    const ready = backendData.ready || {};
+    const execMode = (backendData.executionMode || ready.execution_mode || "c").toUpperCase();
+    lines.push(`Hardware Execution : Mode ${execMode} (vision: ${backendData.visionCompute || "ane"}, language: ${health.language_compute || "gpu"})`);
+    lines.push(`Backend Type       : ${health.backend || ready.backend || backendData.state || "ready"}`);
+    if (backendData.pid) lines.push(`Helper Daemon PID  : ${backendData.pid} (Base URL: ${backendData.baseUrl || "internal"})`);
+
+    if (health.uptime_seconds) {
+      const hours = (health.uptime_seconds / 3600).toFixed(1);
+      lines.push(`Daemon Uptime      : ${hours} hours (${Math.round(health.uptime_seconds)}s)`);
+    }
+
+    if (Array.isArray(health.compute_devices)) {
+      const devices = health.compute_devices.map((d) => {
+        const raw = String(d);
+        if (/MLNeuralEngine/i.test(raw)) return "Apple Neural Engine (ANE)";
+        if (/MLGPU/i.test(raw)) return raw.includes("Apple") ? raw.replace(/<|>/g, "").replace(/0x[0-9a-fA-F]+/g, "").replace(/MLGPUComputeDevice:\s*/g, "").trim() : "Apple GPU";
+        if (/MLCPU/i.test(raw)) return "Apple CPU";
+        return raw.replace(/<|>/g, "").replace(/0x[0-9a-fA-F]+/g, "").trim();
+      }).filter(Boolean);
+      if (devices.length) lines.push(`Compute Devices    : ${devices.join(" | ")}`);
+    }
+
+    if (health.allocated_bytes) {
+      const mb = (health.allocated_bytes / (1024 * 1024)).toFixed(1);
+      const gb = (health.allocated_bytes / (1024 * 1024 * 1024)).toFixed(2);
+      lines.push(`Memory Allocated   : ${gb} GB (${mb} MB)`);
+    }
+
+    const privateAne = health.private_ane || ready.private_ane;
+    if (privateAne) {
+      lines.push("");
+      lines.push("ANE Hardware Telemetry:");
+      const mlpOps = privateAne.native_profile?.mlp?.operations ?? 0;
+      const gpuProjOps = privateAne.native_profile?.mlp?.gpu_projection_operations ?? 0;
+      lines.push(`  - Private ANE MLP Operations : ${mlpOps.toLocaleString()} calls`);
+      lines.push(`  - GPU Projection Operations   : ${gpuProjOps.toLocaleString()} calls`);
+      if (health.requests_total !== undefined) {
+        const succ = health.requests_succeeded ?? 0;
+        const total = health.requests_total ?? 0;
+        const avgLat = health.request_latency_ms_average ? `${(health.request_latency_ms_average / 1000).toFixed(2)}s` : "n/a";
+        lines.push(`  - Requests Handled           : ${succ} succeeded / ${total} total (avg latency: ${avgLat})`);
+      }
+      const sched = health.scheduling || ready.scheduling;
+      if (sched) {
+        lines.push(`  - Pipeline State             : in-flight: ${sched.in_flight || 0}, queue: ${health.queued_requests || 0}`);
+      }
+    }
+  } else {
+    lines.push("Hardware Backend   : Daemon status probed; embedding backend info unavailable");
+  }
+
+  lines.push("==================================================");
+  return lines.join("\n") + "\n";
+}
+
 async function run() {
+  const daemonBase = getDaemonBaseUrl();
+  const daemonProbe = await probeDaemon(daemonBase, 250);
+  const daemonActive = Boolean(daemonProbe);
+
+  if (command === "status" && daemonActive) {
+    let embeddingBackend = typeof daemonProbe === "object" && daemonProbe?.health ? daemonProbe : null;
+    let daemonStatus = typeof daemonProbe === "object" && daemonProbe?.storage ? daemonProbe : null;
+
+    if (!embeddingBackend || !daemonStatus) {
+      const fetches = [];
+      if (!embeddingBackend) {
+        fetches.push(
+          fetch(`${daemonBase}/api/embedding-backend`, { signal: AbortSignal.timeout(5000) })
+            .then((res) => (res.ok ? res.json() : null))
+            .catch(() => null),
+        );
+      } else {
+        fetches.push(Promise.resolve(embeddingBackend));
+      }
+      if (!daemonStatus) {
+        fetches.push(
+          fetch(`${daemonBase}/api/status`, { signal: AbortSignal.timeout(15000) })
+            .then((res) => (res.ok ? res.json() : null))
+            .catch(() => null),
+        );
+      } else {
+        fetches.push(Promise.resolve(daemonStatus));
+      }
+      const [bRes, sRes] = await Promise.all(fetches);
+      embeddingBackend = bRes;
+      daemonStatus = sRes;
+    }
+
+    const config = loadConfig();
+    const profile = activeProfile(config);
+    const effectiveStatus = daemonStatus || {
+      ok: true,
+      activeProfile: profile.id,
+      label: profile.label,
+      storageProvider: profile.storage?.provider || "local",
+      embeddingProvider: profile.embedding?.provider || "apple-native",
+      embeddingModel: profile.embedding?.model || "",
+      embeddingDimension: profile.embedding?.dimension || 2048,
+    };
+
+    if (args.includes("--json") || args.includes("--raw")) {
+      return output({ ok: true, daemon: true, status: effectiveStatus, embeddingBackend });
+    }
+    process.stdout.write(formatHumanStatus(effectiveStatus, embeddingBackend, daemonBase));
+    return;
+  }
+
+  if (command === "embedding" && daemonActive) {
+    const action = String(args[0] || "status");
+    if (action === "status") {
+      let embeddingBackend = typeof daemonProbe === "object" && daemonProbe?.health ? daemonProbe : null;
+      if (!embeddingBackend) {
+        try {
+          const res = await fetch(`${daemonBase}/api/embedding-backend`, { signal: AbortSignal.timeout(5000) });
+          if (res.ok) embeddingBackend = await res.json();
+        } catch {}
+      }
+      if (embeddingBackend) {
+        return output(embeddingBackend);
+      }
+    }
+  }
+
+  if (daemonActive && commandNeedsEmbeddingBackend()) {
+    const config = loadConfig();
+    const profile = activeProfile(config);
+    if (isAppleEmbeddingProfile(profile)) {
+      setRuntimeEmbeddingOverride(profile.id, {
+        baseUrl: `${daemonBase}/api/embedding`,
+        model: profile.embedding?.model || "",
+        dimension: profile.embedding?.dimension || 2048,
+        embeddingSpace: profile.embedding?.embeddingSpace || "",
+      });
+      try {
+        return await main();
+      } finally {
+        clearRuntimeEmbeddingOverride(profile.id);
+      }
+    }
+  }
+
   if (!commandNeedsEmbeddingBackend()) return main();
   const config = loadConfig();
   const profile = activeProfile(config);

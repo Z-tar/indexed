@@ -85,10 +85,32 @@ func check() throws {
     let borrowedValues = Array(UnsafeBufferPointer(start: borrowed.assumingMemoryBound(to: Float16.self), count: output.count))
     indexed_ane_unlock_output(handle, 0)
     try require(borrowedValues == output, "Borrowed ANE output differs from copied output")
-    let linearMIL = try PrivateANELinearWeights.mil(inputDimension: 128, outputDimension: 128, sequenceLength: 64)
-    var identity = [Int8](repeating: 0, count: 128 * 128)
-    for index in 0..<128 { identity[index * 128 + index] = 2 }
-    let linear = try PrivateANEProgram(mil: linearMIL, weights: identity, scales: [Float16](repeating: 0.5, count: 128), inputElements: [128 * 64], outputElements: [128 * 64])
+    let useFP16 = PrivateMLPWeightDtype.auto.resolved == .fp16
+    let linearMIL = try useFP16
+        ? PrivateANELinearWeights.milFP16(inputDimension: 128, outputDimension: 128, sequenceLength: 64)
+        : PrivateANELinearWeights.mil(inputDimension: 128, outputDimension: 128, sequenceLength: 64)
+    var identity: [Int8]
+    var tripleWeights: [Int8]
+    var linearScales: [Float16] = []
+    var tripleScales: [Float16] = []
+    if useFP16 {
+        var fp16Identity = [Float16](repeating: 0, count: 128 * 128)
+        var fp16Triple = [Float16](repeating: 0, count: 128 * 128)
+        for index in 0..<128 {
+            fp16Identity[index * 128 + index] = 1.0
+            fp16Triple[index * 128 + index] = 3.0
+        }
+        identity = fp16Identity.withUnsafeBytes { Array($0.assumingMemoryBound(to: Int8.self)) }
+        tripleWeights = fp16Triple.withUnsafeBytes { Array($0.assumingMemoryBound(to: Int8.self)) }
+    } else {
+        var int8Identity = [Int8](repeating: 0, count: 128 * 128)
+        for index in 0..<128 { int8Identity[index * 128 + index] = 2 }
+        identity = int8Identity
+        tripleWeights = int8Identity
+        linearScales = [Float16](repeating: 0.5, count: 128)
+        tripleScales = [Float16](repeating: 1.5, count: 128)
+    }
+    let linear = try PrivateANEProgram(mil: linearMIL, weights: identity, scales: linearScales, inputElements: [128 * 64], outputElements: [128 * 64])
     let linearInput = Array(input.prefix(128 * 64))
     do {
         _ = try linear.evaluate(updating: [:], cancellation: CancellationToken())
@@ -100,9 +122,9 @@ func check() throws {
     } catch ServiceError.invalidRequest { }
     try require(linear.evaluations == 0, "Rejected sparse input still submitted ANE work")
     let linearOutput = try linear.evaluate([linearInput], cancellation: CancellationToken())
-    try require(linearOutput == [linearInput], "INT8 weight blob / FP16 scale linear kernel differs from identity")
-    let triple = try PrivateANEProgram(mil: linearMIL, weights: identity,
-        scales: [Float16](repeating: 1.5, count: 128), inputElements: [128 * 64],
+    try require(linearOutput == [linearInput], useFP16 ? "FP16 linear kernel differs from identity" : "INT8 weight blob / FP16 scale linear kernel differs from identity")
+    let triple = try PrivateANEProgram(mil: linearMIL, weights: tripleWeights,
+        scales: tripleScales, inputElements: [128 * 64],
         outputElements: [128 * 64], sharing: linear)
     let tripleOutput = try triple.evaluate([linearInput], cancellation: CancellationToken())
     try require(tripleOutput == [linearInput.map { $0 * 3 }], "Shared surfaces changed the second model's weights")

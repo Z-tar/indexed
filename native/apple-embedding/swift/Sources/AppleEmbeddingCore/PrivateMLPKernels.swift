@@ -88,13 +88,13 @@ public enum PrivateMLPKernels {
     static func activation(_ ane: MLXArray, gpu: MLXArray, rows: Int, aneHidden: Int, gpuHidden: Int) -> MLXArray {
         merge([ane, gpu, Int32(rows), Int32(aneHidden), Int32(gpuHidden)],
             template: [("T", gpu.dtype)], grid: (aneHidden + gpuHidden, rows, 1),
-            threadGroup: (16, 16, 1), outputShapes: [[1, rows, aneHidden + gpuHidden]], outputDTypes: [gpu.dtype])[0]
+            threadGroup: (32, 8, 1), outputShapes: [[1, rows, aneHidden + gpuHidden]], outputDTypes: [gpu.dtype])[0]
     }
 
     static func activation(_ ane: MLXArray, gpuGate: MLXArray, gpuUp: MLXArray,
                            validRows: Int, aneRows: Int, aneHidden: Int, gpuHidden: Int) -> MLXArray {
         mergeSplit([ane, gpuGate, gpuUp, Int32(validRows), Int32(aneRows), Int32(aneHidden), Int32(gpuHidden)],
             template: [("T", gpuGate.dtype)], grid: (aneHidden + gpuHidden, validRows, 1),
-            threadGroup: (16, 16, 1), outputShapes: [[1, validRows, aneHidden + gpuHidden]], outputDTypes: [gpuGate.dtype])[0]
+            threadGroup: (32, 8, 1), outputShapes: [[1, validRows, aneHidden + gpuHidden]], outputDTypes: [gpuGate.dtype])[0]
     }
 }

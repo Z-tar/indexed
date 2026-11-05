@@ -78,7 +78,23 @@ public final class PrivateGDNRecurrence: @unchecked Sendable {
                     // then pack dynamic planes without array bounds checks.
                     dynamic.withUnsafeMutableBufferPointer { dynBuf in
                         let dyn = dynBuf.baseAddress!
-                        memset(dyn, 0, dynBuf.count * MemoryLayout<Float16>.stride)
+                        // Maintain structural zeros in rows 64..127.
+                        // Plane 0: clear active heads to ensure zero off-diagonals.
+                        memset(dyn, 0, plane * MemoryLayout<Float16>.stride)
+                        if valid < 64 {
+                            let headElements = (64 - valid) * 128
+                            let headBytes = headElements * MemoryLayout<Float16>.stride
+                            for head in 0..<16 {
+                                let offset = head * matrix + valid * 128
+                                memset(dyn + plane + offset, 0, headBytes)
+                                memset(dyn + 3 * plane + offset, 0, headBytes)
+                                memset(dyn + 5 * plane + offset, 0, headBytes)
+                                memset(dyn + 6 * plane + offset, 0, headBytes)
+                                for col in 0..<128 {
+                                    memset(dyn + 2 * plane + head * matrix + col * 128 + valid, 0, (64 - valid) * MemoryLayout<Float16>.stride)
+                                }
+                            }
+                        }
                         currentState.withUnsafeBufferPointer { stateBuf in
                             (dyn + 4 * plane).update(from: stateBuf.baseAddress!, count: plane)
                         }

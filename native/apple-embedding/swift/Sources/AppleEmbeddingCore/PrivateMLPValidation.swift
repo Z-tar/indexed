@@ -76,9 +76,23 @@ public enum PrivateMLPValidation {
         for _ in 0..<2 {
             weak var retired: PrivateANEProgram?
             try autoreleasepool {
+                let useFP16 = PrivateMLPWeightDtype.auto.resolved == .fp16
+                let mil: String
+                let weights: [Int8]
+                let scales: [Float16]
+                if useFP16 {
+                    mil = try PrivateANELinearWeights.milFP16(inputDimension: 64, outputDimension: 128, sequenceLength: 64)
+                    let fp16Weights = [Float16](repeating: 0.125, count: 64 * 128)
+                    weights = fp16Weights.withUnsafeBytes { Array($0.assumingMemoryBound(to: Int8.self)) }
+                    scales = []
+                } else {
+                    mil = try PrivateANELinearWeights.mil(inputDimension: 64, outputDimension: 128, sequenceLength: 64)
+                    weights = [Int8](repeating: 1, count: 64 * 128)
+                    scales = [Float16](repeating: 0.125, count: 128)
+                }
                 var program: PrivateANEProgram? = try PrivateANEProgram(
-                    mil: PrivateANELinearWeights.mil(inputDimension: 64, outputDimension: 128, sequenceLength: 64),
-                    weights: [Int8](repeating: 1, count: 64 * 128), scales: [Float16](repeating: 0.125, count: 128),
+                    mil: mil,
+                    weights: weights, scales: scales,
                     inputElements: [64 * 64], outputElements: [128 * 64])
                 retired = program
                 let activation = try program!.evaluateActivation([Float16](repeating: 0, count: 64 * 64),
@@ -120,7 +134,7 @@ public enum PrivateMLPValidation {
             guard sqrt(qmmDifference / qmmNorm) < 0.01 else { throw ServiceError.model("Variant 8 GPU suffix differs from Q8 affine reference") }
             valuesChecked += qmmActual.count
             let context = PrivateMLPContext()
-            let configuration = try PrivateMLPConfiguration(sequenceLength: 64)
+            let configuration = try PrivateMLPConfiguration(sequenceLength: 64, shortSequenceLength: nil)
             let hybrid = try PrivateHybridMLP(original: original, configuration: configuration,
                                              context: context, layer: "synthetic")
             for rows in [13, 31, 32, 63, 64, 65, 96, 128, 2112, 2113, 2144] {

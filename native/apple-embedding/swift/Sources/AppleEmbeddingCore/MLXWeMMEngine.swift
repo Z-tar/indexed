@@ -692,9 +692,27 @@ public final class MLXWeMMEngine: EmbeddingEngine, @unchecked Sendable {
             throw ServiceError.invalidRequest("视频帧包最多支持 64 帧", status: 413)
         }
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
-        var frames: [[Float]] = []
+        let side = modelPackage.manifest.vision.imageSize
+        struct RawFrame: Sendable {
+            let rgba: [UInt8]
+            let width: Int
+            let height: Int
+        }
+        final class ConcurrentBuffer: @unchecked Sendable {
+            var items: [[Float]]
+            private let lock = NSLock()
+            init(count: Int) {
+                self.items = Array(repeating: [], count: count)
+            }
+            func set(_ index: Int, _ value: [Float]) {
+                lock.lock()
+                items[index] = value
+                lock.unlock()
+            }
+        }
+        var rawFrames: [RawFrame] = []
         var frameTimes: [Double] = []
-        frames.reserveCapacity(inputs.count + 1)
+        rawFrames.reserveCapacity(inputs.count + 1)
         frameTimes.reserveCapacity(inputs.count + 1)
         for (index, input) in inputs.enumerated() {
             try cancellation.check()
@@ -709,9 +727,43 @@ public final class MLXWeMMEngine: EmbeddingEngine, @unchecked Sendable {
                image.extent.width > 0, image.extent.height > 0 else {
                 throw ServiceError.invalidRequest("视频第 \(index + 1) 帧无法解码")
             }
-            frames.append(try normalizedRGB(image, colorSpace: sRGB))
+            let sourceWidth = Int(image.extent.width.rounded())
+            let sourceHeight = Int(image.extent.height.rounded())
+            guard sourceWidth > 0, sourceHeight > 0,
+                  sourceWidth <= 16_384, sourceHeight <= 16_384,
+                  sourceWidth * sourceHeight <= 100_000_000 else {
+                throw ServiceError.invalidRequest("图片像素尺寸超出安全限制", status: 413)
+            }
+            var sourceRGBA = [UInt8](repeating: 0, count: sourceWidth * sourceHeight * 4)
+            sourceRGBA.withUnsafeMutableBytes { buffer in
+                imageContext.render(
+                    image,
+                    toBitmap: buffer.baseAddress!,
+                    rowBytes: sourceWidth * 4,
+                    bounds: image.extent,
+                    format: .RGBA8,
+                    colorSpace: sRGB
+                )
+            }
+            rawFrames.append(RawFrame(rgba: sourceRGBA, width: sourceWidth, height: sourceHeight))
             frameTimes.append(input.timestamp)
         }
+        try cancellation.check()
+        let frozenRaw = rawFrames
+        let buffer = ConcurrentBuffer(count: frozenRaw.count)
+        let normTable = normalizationTable
+        DispatchQueue.concurrentPerform(iterations: frozenRaw.count) { i in
+            let raw = frozenRaw[i]
+            let rgba = PillowBicubic.resizeRGBA(
+                raw.rgba,
+                width: raw.width,
+                height: raw.height,
+                to: side,
+                side
+            )
+            buffer.set(i, VisionPatches.normalizedCHW(rgba, side: side, table: normTable))
+        }
+        var frames = buffer.items
         if frames.count == 1 {
             frames.append(frames[0])
             frameTimes.append(frameTimes[0])
@@ -752,7 +804,6 @@ public final class MLXWeMMEngine: EmbeddingEngine, @unchecked Sendable {
                 colorSpace: sRGB
             )
         }
-        imageContext.clearCaches()
         let rgba = PillowBicubic.resizeRGBA(
             sourceRGBA,
             width: sourceWidth,

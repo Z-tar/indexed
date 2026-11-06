@@ -7,7 +7,7 @@
 
 ### 🌟 本分支核心增强特性 (Apple Silicon Boost)
 
-本分支针对 Apple Silicon（M1/M2/M3/M4 系列，特别是 M3 Pro/Max 芯片）在原生运行中的卡顿、闪退、硬件利用不充分等痛点，进行了系统级重构与性能升级：
+本分支主要针对 **Apple Silicon M3 系列**（以 M3 Pro 为硬件基准深度调优与极限压测），并**完全兼容 M1 / M2 / M4 全系列芯片**。针对原生运行中的卡顿、闪退、硬件利用不充分等痛点，进行了系统级重构与性能升级：
 
 - **ANE 自适应双桶架构**：新增 256 与 2112 Tokens 双桶自适应分流，短文本 ANE 命中率提升至 100%，单次延迟降至 1.13ms。
 - **稳定性修复**：彻底修复长视频尾部分片负维度导致的 `Fatal error: [full] Negative dimensions not allowed` 底层崩溃闪退。
@@ -18,7 +18,7 @@
 - **检索体验革新**：搜索结果按视频自动聚合为单张主卡片 + 时间点标签，支持 B 站与 YouTube 跨平台同名视频智能去重。
 - **全新 CLI 遥测仪表盘**：`indexed status` 改用 HTTP 守护探活消除文件锁冲突，直观展示 ANE/GPU 硬件调用情况与向量统计。
 
-📦 **最新预编译插件开箱即用**：前往 [Releases 页面](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.14.7.zip` 即可使用。
+📦 **最新预编译插件开箱即用**：前往 [Releases 页面](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.14.8.zip` 即可使用。
 
 ---
 

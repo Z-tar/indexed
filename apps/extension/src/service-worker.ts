@@ -2142,8 +2142,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function injectPlayerControlsIntoOpenTabs() {
   const tabs = await chrome.tabs.query({
     url: [
-      "https://www.youtube.com/watch*",
-      "https://www.bilibili.com/video/*",
+      "https://www.youtube.com/*",
+      "https://www.bilibili.com/*",
     ],
   });
   await Promise.all(tabs.map(async (tab) => {

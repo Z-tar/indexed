@@ -2,7 +2,7 @@
 import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
 (() => {
-  const CONTENT_SCRIPT_VERSION = "0.14.7";
+  const CONTENT_SCRIPT_VERSION = "0.14.8";
   if (globalThis.__sceneMemoryContentScriptLoaded === CONTENT_SCRIPT_VERSION) return;
   globalThis.__sceneMemoryContentScriptLoaded = CONTENT_SCRIPT_VERSION;
 
@@ -56,10 +56,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
   function invalidateExtensionContext(message = "扩展已重新加载，请刷新当前视频页面") {
     runtime.running = false;
     runtime.lastError = message;
-    if (runtime.timer) {
-      window.clearInterval(runtime.timer);
-      runtime.timer = null;
-    }
+    stopTimer();
     const segment = runtime.activeSegment;
     runtime.activeSegment = null;
     if (segment) {
@@ -91,9 +88,14 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
   function videoId() {
     if (sourceSite() === "bilibili") {
-      return location.pathname.match(/\/video\/(BV[A-Za-z0-9]+|av\d+)/i)?.[1] || "";
+      return location.pathname.match(/\/(?:video|bangumi\/play)\/(BV[A-Za-z0-9]+|av\d+|ep\d+|ss\d+)/i)?.[1]
+        || location.pathname.match(/\/video\/(BV[A-Za-z0-9]+|av\d+)/i)?.[1]
+        || "";
     }
-    return new URL(location.href).searchParams.get("v") || "";
+    const url = new URL(location.href);
+    return url.searchParams.get("v")
+      || location.pathname.match(/\/(?:shorts|live|embed)\/([A-Za-z0-9_-]+)/)?.[1]
+      || "";
   }
 
   function currentVideoIdentity() {
@@ -120,7 +122,9 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
           }
         : null;
     }
-    const container = document.querySelector(".ytp-right-controls-left")
+    const container = document.querySelector("#movie_player .ytp-right-controls-left")
+      || document.querySelector("#movie_player .ytp-right-controls")
+      || document.querySelector(".ytp-right-controls-left")
       || document.querySelector(".ytp-right-controls");
     return container
       ? {
@@ -149,18 +153,46 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     button.setAttribute("aria-pressed", String(state === "active"));
   }
 
+  let mountRetriesTimer = null;
+  function scheduleFloatingButtonMount() {
+    if (mountRetriesTimer) {
+      window.clearTimeout(mountRetriesTimer);
+      mountRetriesTimer = null;
+    }
+    if (!videoId()) {
+      if (runtime.floatingHost) {
+        runtime.floatingHost.remove();
+        runtime.floatingHost = null;
+        runtime.floatingButton = null;
+      }
+      return;
+    }
+    if (ensureFloatingButton(true)) return;
+
+    const delays = [150, 400, 1000, 2500];
+    let step = 0;
+    function attempt() {
+      if (!videoId()) return;
+      if (ensureFloatingButton(true)) return;
+      if (step < delays.length) {
+        mountRetriesTimer = window.setTimeout(attempt, delays[step++]);
+      }
+    }
+    mountRetriesTimer = window.setTimeout(attempt, delays[step++]);
+  }
+
   function ensureFloatingButton(force = false) {
     const now = Date.now();
-    if (!force && now - runtime.lastFloatingCheck < 1000) return;
+    if (!force && now - runtime.lastFloatingCheck < 1000) return false;
     runtime.lastFloatingCheck = now;
     const slot = playerControlSlot();
-    if (!slot || !videoId()) return;
+    if (!slot || !videoId()) return false;
     if (runtime.floatingHost?.isConnected && runtime.floatingHost.parentElement === slot.container) {
       if (slot.anchor && runtime.floatingHost.nextElementSibling !== slot.anchor) {
         slot.container.insertBefore(runtime.floatingHost, slot.anchor);
       }
       updateFloatingButton();
-      return;
+      return true;
     }
     const staleHost = document.getElementById(FLOATING_BUTTON_ID);
     if (staleHost && staleHost !== runtime.floatingHost) {
@@ -231,6 +263,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     runtime.floatingHost = host;
     runtime.floatingButton = button;
     updateFloatingButton();
+    return true;
   }
 
   function textOf(selector) {
@@ -644,6 +677,10 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
   }
 
   async function tick() {
+    if (!runtime.running) {
+      stopTimer();
+      return;
+    }
     ensureFloatingButton();
     if (runtime.tickInFlight) return;
     runtime.tickInFlight = true;
@@ -658,8 +695,15 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
   }
 
   function ensureTimer() {
-    if (runtime.timer) return;
+    if (runtime.timer || !runtime.running) return;
     runtime.timer = window.setInterval(() => void tick(), TICK_MILLISECONDS);
+  }
+
+  function stopTimer() {
+    if (runtime.timer) {
+      window.clearInterval(runtime.timer);
+      runtime.timer = null;
+    }
   }
 
   async function start(options = {}) {
@@ -679,6 +723,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
   async function stop() {
     runtime.running = false;
+    stopTimer();
     await finalizeActiveSegment("manual_stop");
     runtime.activeIdentity = "";
     updateFloatingButton();
@@ -721,7 +766,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     } else if (runtime.running) {
       await stop();
     }
-    ensureFloatingButton(true);
+    scheduleFloatingButtonMount();
     updateFloatingButton();
     return publicState();
   }
@@ -798,20 +843,26 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
   });
   document.addEventListener("yt-navigate-finish", () => {
     runtime.lastCompletedVideoId = "";
+    scheduleFloatingButtonMount();
     void syncVideoIndexing();
     void syncRebuildJob();
   });
   window.addEventListener("popstate", () => {
     if (runtime.running) void finalizeActiveSegment("navigate");
     runtime.lastCompletedVideoId = "";
+    scheduleFloatingButtonMount();
     void syncVideoIndexing();
     void syncRebuildJob();
   });
   document.addEventListener("seeking", () => {
     if (runtime.running) void finalizeActiveSegment("seek");
   }, true);
+  document.addEventListener("playing", () => {
+    scheduleFloatingButtonMount();
+  }, true);
   window.addEventListener("pagehide", () => {
     if (runtime.running) void finalizeActiveSegment("pagehide");
+    stopTimer();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") {
@@ -820,6 +871,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     }
     // Indexed never owns playback. Returning to the tab only refreshes capture
     // state; the player remains entirely under the user's control.
+    scheduleFloatingButtonMount();
     void syncRebuildJob();
   });
   document.addEventListener("keydown", (event) => {
@@ -834,8 +886,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
       if (area === "local" && changes.youtubeRebuildJob) void syncRebuildJob();
     });
   }
-  ensureTimer();
-  ensureFloatingButton(true);
+  scheduleFloatingButtonMount();
   void syncVideoIndexing();
   void syncRebuildJob();
 })();

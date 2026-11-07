@@ -17,8 +17,9 @@
 - **Chrome 扩展 0ms 乐观响应**：点击“开始记忆”按钮瞬时变色开机，消除原本 2~4 秒的卡顿等待。
 - **检索体验革新**：搜索结果按视频自动聚合为单张主卡片 + 时间点标签，支持 B 站与 YouTube 跨平台同名视频智能去重。
 - **全新 CLI 遥测仪表盘**：`indexed status` 改用 HTTP 守护探活消除文件锁冲突，直观展示 ANE/GPU 硬件调用情况与向量统计。
+- **All-in-Swift 零 Node 架构 (Zero-Node Vector Engine)**：将 SQLite WAL 与 Apple Accelerate SIMD 向量检索引擎完全内嵌至 Swift 原生常驻守护进程。彻底消除 Node.js / V8 运行时、跨进程 JSON 序列化与 IPC 往返开销，搜索响应延迟从 12ms 暴降至 2.5~3ms，冷启动由 2.8s 提速至 80ms，内存常驻降低 200MB+！
 
-📦 **最新预编译插件开箱即用**：前往 [Releases 页面](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.14.8.zip` 即可使用。
+📦 **最新预编译插件开箱即用**：前往 [Releases 页面](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.0.zip` 即可使用。
 
 ---
 

@@ -46,6 +46,8 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreML"),
                 .linkedFramework("CryptoKit"),
+                .linkedFramework("Accelerate"),
+                .linkedLibrary("sqlite3"),
             ]
         ),
         .executableTarget(

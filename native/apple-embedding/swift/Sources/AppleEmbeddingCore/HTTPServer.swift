@@ -139,7 +139,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
         }
         do {
             let request = try readRequest(descriptor, cancellation: cancellation)
-            if request.method == "POST", request.path == "/v1/embeddings" {
+            if request.method == "POST" {
                 watcher = try watchDisconnect(descriptor, cancellation: cancellation)
             }
             let response = router.route(request, cancellation: cancellation)
@@ -233,11 +233,9 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
             }
             if let headerEnd, data.count >= headerEnd + contentLength {
                 let head = try parseHead(data[..<(headerEnd - terminator.count)])
-                let path = head.path.split(separator: "?", maxSplits: 1).first.map(String.init)
-                    ?? head.path
                 return HTTPRequest(
                     method: head.method,
-                    path: path,
+                    path: head.path,
                     headers: head.headers,
                     body: data.subdata(in: headerEnd ..< headerEnd + contentLength)
                 )

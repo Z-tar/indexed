@@ -143,7 +143,11 @@ private enum ServiceMain {
                 developmentPipelineDepth: privateOptions.pipelineDepth
             )
         }
-        let router = try ServiceRouter(engine: engine, configuration: configuration)
+        let vectorStorePath = argument("--vector-store", in: arguments)
+            ?? ProcessInfo.processInfo.environment["INDEXED_VECTOR_STORE_PATH"]
+            ?? NSString(string: "~/.local/share/indexed/data.sqlite").expandingTildeInPath
+        let vectorStore = try? NativeVectorStore(databaseURL: URL(fileURLWithPath: vectorStorePath))
+        let router = try ServiceRouter(engine: engine, configuration: configuration, vectorStore: vectorStore)
         let server = LoopbackHTTPServer(router: router, configuration: configuration)
         try server.start()
 
@@ -160,6 +164,7 @@ private enum ServiceMain {
             "url": .string("http://127.0.0.1:\(server.boundPort)"),
             "default_model": .string(try modelID(dimension: defaultDimension)),
             "backend": .string(engine.metadata.backend),
+            "vector_store": vectorStore != nil ? .string(vectorStorePath) : .null,
             "execution_mode": .string(selectedMode ?? (visionComputeTarget == .gpu ? "a" : "b")),
             "private_ane": engine.metadata.privateANE ?? .null,
             "scheduling": engine.metadata.scheduling ?? .null,

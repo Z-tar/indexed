@@ -9,7 +9,7 @@
 
 本分支主要针对 **Apple Silicon M3 系列**（以 M3 Pro 为硬件基准深度调优与极限压测），并**完全兼容 M1 / M2 / M4 全系列芯片**。针对原生运行中的卡顿、闪退、硬件利用不充分等痛点，进行了系统级重构与性能升级：
 
-- **All-in-Swift 零 Node 架构 (Zero-Node Vector Engine)**：将 SQLite WAL 与 Apple Accelerate SIMD 向量检索引擎完全内嵌至 Swift 原生常驻守护进程。彻底消除 Node.js / V8 运行时、跨进程 JSON 序列化与 IPC 往返开销，搜索响应延迟从 12ms 暴降至 2.5~3ms，冷启动由 2.8s 提速至 80ms，内存常驻降低 200MB+！
+- **All-in-Swift 零 Node 架构 (Zero-Node Vector Engine)**：将 SQLite WAL 与 Apple Accelerate SIMD 向量检索引擎完全内嵌至 Swift 原生常驻守护进程。消除 Node.js / V8 运行时、跨进程 JSON 序列化与 IPC 往返开销，检索响应延迟由 12.0ms 降低至 2.8ms，冷启动由 2.8s 缩短至 80ms，常驻内存减少约 220MB。
 - **ANE 自适应双桶架构**：新增 256 与 2112 Tokens 双桶自适应分流，短文本 ANE 命中率提升至 100%，单次延迟降至 1.13ms。
 - **稳定性修复**：彻底修复长视频尾部分片负维度导致的 `Fatal error: [full] Negative dimensions not allowed` 底层崩溃闪退。
 - **零拷贝 IOSurface 内存直传**：消除 CPU 反复深度拷贝 8.6MB 矩阵，数据生成开销从 288s 暴降至 111ms。
@@ -38,13 +38,13 @@ This fork is deeply optimized and stress-tested on **Apple Silicon M3 series** (
 
 ### 📊 性能实测基准对照 / Benchmark Comparison (v0.14.8 vs v0.15.0)
 
-| 关键性能指标 / Key Metrics | v0.14.8 (Node.js + IPC + zvec) | v0.15.0 (All-in-Swift Zero-Node) | 提升幅度 / Improvement |
+| 性能指标 / Metrics | v0.14.8 (Node.js + IPC + zvec) | v0.15.0 (All-in-Swift Zero-Node) | 变化 / Delta |
 | :--- | :--- | :--- | :--- |
-| **端到端检索响应延迟 / Search Latency** | 12.0 ms | **2.8 ms** | **4.28× Faster (暴降 76%)** |
-| **10,000 向量 SIMD 扫描 / Vector Scan** | 3.5 ms | **0.31 ms** | **11.3× Faster (Apple Accelerate)** |
-| **服务冷启动时间 / Cold Startup** | 2,800 ms (2.8s) | **80 ms** | **35× Faster (瞬时就绪)** |
-| **系统运行时常驻内存 / Resident RAM** | ~480 MB (Node + Swift) | **~260 MB (纯 Swift 单进程)** | **节省 220MB+ (降幅 45%)** |
-| **外部运行时依赖 / External Dependencies** | Node.js 20+、V8、zvec C++ 编译 | **零外部依赖 (macOS 原生闭环)** | **完全解耦 (Zero-Node)** |
+| **端到端检索延迟 / End-to-End Search Latency** | 12.0 ms | **2.8 ms** | **-76.7% (4.28×)** |
+| **10,000 向量检索耗时 / 10k Vector Scan Time** | 3.5 ms | **0.31 ms** | **-91.1% (11.3×)** |
+| **服务冷启动时间 / Cold Startup Time** | 2,800 ms (2.8s) | **80 ms** | **-97.1% (35×)** |
+| **常驻内存占用 / Resident Memory (RSS)** | ~480 MB (Node + Swift) | **~260 MB (Swift)** | **-220 MB (-45.8%)** |
+| **外部运行时依赖 / Runtime Dependencies** | Node.js 20+, V8, zvec C++ | **macOS 原生库 (None external)** | **完全解耦 / Fully Decoupled** |
 
 📦 **最新预编译插件开箱即用 / Ready-to-use Prebuilt Extension**：前往 [Releases 页面 / Releases Page](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.0.zip` 即可使用。
 

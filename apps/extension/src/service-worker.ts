@@ -1901,7 +1901,7 @@ async function videoLibraryStatus() {
   await purgeAbandonedQueueItems();
   if (config.backendMode === "local") {
     const [library, queue, processed, sessions] = await Promise.all([
-      localServerRequest(config, "/api/extension-library"),
+      localServerRequest(config, "/api/extension-library?includeThumbnail=false"),
       storeAll(QUEUE_STORE),
       storeAll(PROCESSED_STORE),
       storeAll(SESSION_STORE),

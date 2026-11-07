@@ -127,6 +127,9 @@ public final class ServiceRouter: @unchecked Sendable {
             if request.method == "POST", pathname == "/v1/embeddings" {
                 return try embeddings(request, cancellation: cancellation)
             }
+            if (request.method == "GET" || request.method == "HEAD"), let staticResponse = serveStaticAsset(pathname, method: request.method) {
+                return staticResponse
+            }
             throw ServiceError.notFound("Not found")
         } catch ServiceError.cancelled {
             return errorResponse(cancellation.hasExpired ? .deadlineExceeded : .cancelled)
@@ -1014,5 +1017,40 @@ public final class ServiceRouter: @unchecked Sendable {
             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Indexed-Token, X-Indexed-Timeout-MS",
             "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
         ]
+    }
+
+    private func serveStaticAsset(_ pathname: String, method: String = "GET") -> HTTPResponse? {
+        let cleanPath = pathname == "/" ? "/index.html" : pathname
+        let validExtensions = [".html", ".js", ".css", ".svg", ".png", ".jpg", ".jpeg", ".ico", ".json", ".woff", ".woff2"]
+        guard validExtensions.contains(where: { cleanPath.hasSuffix($0) }) else { return nil }
+
+        let candidates = [
+            ProcessInfo.processInfo.environment["INDEXED_DASHBOARD_DIR"],
+            "/Users/r/Documents/antigravity/indexed/dist/dashboard",
+            FileManager.default.currentDirectoryPath + "/dist/dashboard"
+        ].compactMap { $0 }
+
+        for dir in candidates {
+            let fileURL = URL(fileURLWithPath: dir).appendingPathComponent(cleanPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            if FileManager.default.fileExists(atPath: fileURL.path),
+               let data = try? Data(contentsOf: fileURL) {
+                var mimeType = "application/octet-stream"
+                if cleanPath.hasSuffix(".html") { mimeType = "text/html; charset=utf-8" }
+                else if cleanPath.hasSuffix(".js") { mimeType = "text/javascript; charset=utf-8" }
+                else if cleanPath.hasSuffix(".css") { mimeType = "text/css; charset=utf-8" }
+                else if cleanPath.hasSuffix(".svg") { mimeType = "image/svg+xml; charset=utf-8" }
+                else if cleanPath.hasSuffix(".json") { mimeType = "application/json; charset=utf-8" }
+                else if cleanPath.hasSuffix(".png") { mimeType = "image/png" }
+
+                let body = method == "HEAD" ? Data() : data
+                return HTTPResponse(status: 200, body: body, headers: [
+                    "Content-Type": mimeType,
+                    "Content-Length": String(data.count),
+                    "Cache-Control": "no-cache",
+                    "Access-Control-Allow-Origin": "*"
+                ])
+            }
+        }
+        return nil
     }
 }

@@ -401,6 +401,10 @@ async function refreshStats() {
   elements.connection.textContent = "已连接";
   elements.connection.className = "connection ok";
   renderDashboard();
+  void chrome.storage.local.set({
+    last_library_state: library,
+    last_queue_state: queue,
+  });
 }
 
 async function refreshProgress() {
@@ -421,6 +425,17 @@ async function refreshProgress() {
 }
 
 async function initialize() {
+  try {
+    const cached = await chrome.storage.local.get(["last_library_state", "last_queue_state"]);
+    if (cached.last_library_state) {
+      libraryState = cached.last_library_state;
+      queueState = cached.last_queue_state || {};
+      elements.connection.textContent = "已连接";
+      elements.connection.className = "connection ok";
+      renderDashboard();
+    }
+  } catch {}
+
   [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (
     activeTab?.url?.startsWith("https://www.youtube.com/watch")

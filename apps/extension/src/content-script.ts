@@ -2,7 +2,7 @@
 import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
 (() => {
-  const CONTENT_SCRIPT_VERSION = "0.15.2";
+  const CONTENT_SCRIPT_VERSION = "0.15.3";
   if (globalThis.__sceneMemoryContentScriptLoaded === CONTENT_SCRIPT_VERSION) return;
   globalThis.__sceneMemoryContentScriptLoaded = CONTENT_SCRIPT_VERSION;
 
@@ -116,14 +116,29 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
       || document.querySelector("video");
   }
 
+  function resolveDirectChild(container, selector) {
+    if (!container) return null;
+    let target = selector ? container.querySelector(selector) : null;
+    if (!target) return container.firstElementChild || null;
+    while (target && target.parentElement && target.parentElement !== container) {
+      target = target.parentElement;
+    }
+    return target && target.parentElement === container ? target : container.firstElementChild || null;
+  }
+
+  function safeInsertBefore(container, node, anchor) {
+    if (!container || !node) return;
+    const validAnchor = anchor && anchor.parentElement === container ? anchor : null;
+    container.insertBefore(node, validAnchor);
+  }
+
   function playerControlSlot() {
     if (sourceSite() === "bilibili") {
       const container = document.querySelector(".bpx-player-control-bottom-right");
       return container
         ? {
             container,
-            anchor: container.querySelector(".immersive-translate-quick-button-container")
-              || container.firstElementChild,
+            anchor: resolveDirectChild(container, ".immersive-translate-quick-button-container"),
             width: 40,
             pageClass: "bpx-player-ctrl-btn indexed-player-control",
           }
@@ -136,9 +151,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     return container
       ? {
           container,
-          anchor: container.querySelector(".ytp-subtitles-button")
-            || container.querySelector(".ytp-settings-button")
-            || container.firstElementChild,
+          anchor: resolveDirectChild(container, ".ytp-subtitles-button, .ytp-settings-button"),
           width: 48,
           pageClass: "ytp-button indexed-player-control",
         }
@@ -196,7 +209,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
     if (!slot || !videoId()) return false;
     if (runtime.floatingHost?.isConnected && runtime.floatingHost.parentElement === slot.container) {
       if (slot.anchor && runtime.floatingHost.nextElementSibling !== slot.anchor) {
-        slot.container.insertBefore(runtime.floatingHost, slot.anchor);
+        safeInsertBefore(slot.container, runtime.floatingHost, slot.anchor);
       }
       updateFloatingButton();
       return true;
@@ -266,7 +279,7 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
       });
     });
     shadow.append(style, button);
-    slot.container.insertBefore(host, slot.anchor || null);
+    safeInsertBefore(slot.container, host, slot.anchor);
     runtime.floatingHost = host;
     runtime.floatingButton = button;
     updateFloatingButton();

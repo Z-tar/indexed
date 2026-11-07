@@ -107,6 +107,7 @@ public final class ServiceRouter: @unchecked Sendable {
             if request.method == "GET", pathname == "/health" { return try health() }
             if request.method == "GET", pathname == "/v1/models" { return try models() }
             if request.method == "GET", pathname == "/api/status" { return try apiStatus() }
+            if request.method == "GET", pathname == "/api/embedding-backend" { return try apiEmbeddingBackend() }
             if request.method == "GET", pathname == "/api/vectors" { return try apiVectors() }
             if request.method == "GET", pathname == "/api/extension-config" { return try apiExtensionConfig() }
             if request.method == "GET", pathname == "/api/videos" { return try apiVideos(request) }
@@ -121,10 +122,10 @@ public final class ServiceRouter: @unchecked Sendable {
             if request.method == "POST", (pathname == "/api/ingest" || pathname.hasPrefix("/api/ingest/")) {
                 return try apiIngest(request, cancellation: cancellation)
             }
-            if request.method == "DELETE", pathname.hasPrefix("/v1/requests/") {
+            if request.method == "DELETE", (pathname.hasPrefix("/v1/requests/") || pathname.hasPrefix("/api/embedding/v1/requests/")) {
                 return try cancel(pathname)
             }
-            if request.method == "POST", pathname == "/v1/embeddings" {
+            if request.method == "POST", (pathname == "/v1/embeddings" || pathname == "/api/embedding/v1/embeddings" || pathname == "/api/embedding") {
                 return try embeddings(request, cancellation: cancellation)
             }
             if (request.method == "GET" || request.method == "HEAD"), let staticResponse = serveStaticAsset(pathname, method: request.method) {
@@ -370,6 +371,36 @@ public final class ServiceRouter: @unchecked Sendable {
         token.cancel()
         return try response(status: 202, value: .object([
             "status": .string("cancelling"), "request_id": .string(requestID),
+        ]))
+    }
+
+    private func apiEmbeddingBackend() throws -> HTTPResponse {
+        let dim = configuration.defaultDimension
+        let space = embeddingSpace(dim)
+        let model = (try? modelID(dimension: dim)) ?? "wemm-embedding-2b-apple-2048"
+        return try response(status: 200, value: .object([
+            "managed": .bool(true),
+            "state": .string("ready"),
+            "mode": .string("fast"),
+            "visionCompute": .string("ane"),
+            "executionMode": .string("c"),
+            "pid": .number(Double(ProcessInfo.processInfo.processIdentifier)),
+            "baseUrl": .string("http://127.0.0.1:\(configuration.port)"),
+            "model": .string(model),
+            "dimension": .number(Double(dim)),
+            "embeddingSpace": .string(space),
+            "startedAt": .number(startedAt.timeIntervalSince1970 * 1000),
+            "restartCount": .number(0),
+            "lastExit": .null,
+            "lastError": .null,
+            "stderrTail": .array([]),
+            "ready": .object([
+                "status": .string("ready"),
+                "url": .string("http://127.0.0.1:\(configuration.port)"),
+                "default_model": .string(model),
+                "backend": .string(engine.metadata.backend),
+                "execution_mode": .string("c")
+            ])
         ]))
     }
 

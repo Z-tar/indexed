@@ -125,6 +125,9 @@ function openUrl(url) {
   spawn(executable, openArgs, { detached: true, stdio: "ignore" }).unref();
 }
 
+let daemonActive = false;
+let daemonBase = "http://127.0.0.1:18767";
+
 async function main() {
   if (command === "serve") {
     const started = await startServer({ host: value("--host"), port: value("--port") });
@@ -252,14 +255,38 @@ async function main() {
     throw new Error(`未知 embedding 命令：${action}`);
   }
   if (command === "status") return output(await status());
-  if (command === "search") return output(await search(positional().join(" "), { limit: Number(value("--limit", 30)), videoId: value("--video") }));
+  if (command === "search") {
+    if (daemonActive) {
+      const res = await fetch(`${daemonBase}/api/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: positional().join(" "), limit: Number(value("--limit", 30)), videoId: value("--video") })
+      });
+      if (!res.ok) throw new Error(`搜索服务返回 ${res.status}: ${await res.text()}`);
+      return output(await res.json());
+    }
+    return output(await search(positional().join(" "), { limit: Number(value("--limit", 30)), videoId: value("--video") }));
+  }
   if (command === "videos") {
     const action = args.shift() || "list";
-    if (action === "list") return output(await listVideos({ limit: Number(value("--limit", 100)) }));
+    if (action === "list") {
+      if (daemonActive) {
+        const limit = Number(value("--limit", 100));
+        const res = await fetch(`${daemonBase}/api/videos?limit=${limit}`);
+        if (!res.ok) throw new Error(`视频列表服务返回 ${res.status}: ${await res.text()}`);
+        return output(await res.json());
+      }
+      return output(await listVideos({ limit: Number(value("--limit", 100)) }));
+    }
     const [site, id] = positional();
     if (!site || !id) throw new Error("需要 SITE 和 VIDEO_ID");
     if (action === "delete") {
       if (!args.includes("--yes")) throw new Error("删除向量不可恢复；确认后添加 --yes");
+      if (daemonActive) {
+        const res = await fetch(`${daemonBase}/api/videos/${encodeURIComponent(site)}/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`删除服务返回 ${res.status}: ${await res.text()}`);
+        return output(await res.json());
+      }
       const config = loadConfig();
       const plan = await prepareVideoDeletion(site, id, config);
       return output(await deleteVideo(site, id, config, { confirmation: { schema: plan.schema, token: plan.token, confirmed: true } }));
@@ -549,9 +576,9 @@ function formatHumanStatus(statusData, backendData, daemonBase) {
 }
 
 async function run() {
-  const daemonBase = getDaemonBaseUrl();
+  daemonBase = getDaemonBaseUrl();
   const daemonProbe = await probeDaemon(daemonBase, 250);
-  const daemonActive = Boolean(daemonProbe);
+  daemonActive = Boolean(daemonProbe);
 
   if (command === "status" && daemonActive) {
     let embeddingBackend = typeof daemonProbe === "object" && daemonProbe?.health ? daemonProbe : null;
@@ -622,7 +649,7 @@ async function run() {
     const profile = activeProfile(config);
     if (isAppleEmbeddingProfile(profile)) {
       setRuntimeEmbeddingOverride(profile.id, {
-        baseUrl: `${daemonBase}/api/embedding`,
+        baseUrl: `${daemonBase}`,
         model: profile.embedding?.model || "",
         dimension: profile.embedding?.dimension || 2048,
         embeddingSpace: profile.embedding?.embeddingSpace || "",

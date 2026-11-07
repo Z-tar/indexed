@@ -2,7 +2,7 @@
 import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
 (() => {
-  const CONTENT_SCRIPT_VERSION = "0.15.1";
+  const CONTENT_SCRIPT_VERSION = "0.15.2";
   if (globalThis.__sceneMemoryContentScriptLoaded === CONTENT_SCRIPT_VERSION) return;
   globalThis.__sceneMemoryContentScriptLoaded = CONTENT_SCRIPT_VERSION;
 
@@ -104,8 +104,15 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
   }
 
   function videoElement() {
-    return document.querySelector("video.html5-main-video")
-      || document.querySelector(".bpx-player-video-wrap video")
+    if (sourceSite() === "youtube") {
+      return document.querySelector("#movie_player video.html5-main-video")
+        || document.querySelector("#movie_player video")
+        || document.querySelector(".html5-video-player video")
+        || document.querySelector("video.html5-main-video")
+        || document.querySelector("video");
+    }
+    return document.querySelector(".bpx-player-video-wrap video")
+      || document.querySelector("#bilibili-player video")
       || document.querySelector("video");
   }
 
@@ -859,6 +866,17 @@ import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
   }, true);
   document.addEventListener("playing", () => {
     scheduleFloatingButtonMount();
+    void syncVideoSession(true);
+  }, true);
+  document.addEventListener("play", () => {
+    scheduleFloatingButtonMount();
+    void syncVideoSession(true);
+  }, true);
+  document.addEventListener("pause", () => {
+    void syncVideoSession(true);
+  }, true);
+  document.addEventListener("ended", () => {
+    void syncVideoSession(true);
   }, true);
   window.addEventListener("pagehide", () => {
     if (runtime.running) void finalizeActiveSegment("pagehide");

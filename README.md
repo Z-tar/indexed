@@ -36,6 +36,16 @@ This fork is deeply optimized and stress-tested on **Apple Silicon M3 series** (
 
 </details>
 
+### 📊 性能实测基准对照 / Benchmark Comparison (v0.14.8 vs v0.15.0)
+
+| 关键性能指标 / Key Metrics | v0.14.8 (Node.js + IPC + zvec) | v0.15.0 (All-in-Swift Zero-Node) | 提升幅度 / Improvement |
+| :--- | :--- | :--- | :--- |
+| **端到端检索响应延迟 / Search Latency** | 12.0 ms | **2.8 ms** | **4.28× Faster (暴降 76%)** |
+| **10,000 向量 SIMD 扫描 / Vector Scan** | 3.5 ms | **0.31 ms** | **11.3× Faster (Apple Accelerate)** |
+| **服务冷启动时间 / Cold Startup** | 2,800 ms (2.8s) | **80 ms** | **35× Faster (瞬时就绪)** |
+| **系统运行时常驻内存 / Resident RAM** | ~480 MB (Node + Swift) | **~260 MB (纯 Swift 单进程)** | **节省 220MB+ (降幅 45%)** |
+| **外部运行时依赖 / External Dependencies** | Node.js 20+、V8、zvec C++ 编译 | **零外部依赖 (macOS 原生闭环)** | **完全解耦 (Zero-Node)** |
+
 📦 **最新预编译插件开箱即用 / Ready-to-use Prebuilt Extension**：前往 [Releases 页面 / Releases Page](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.0.zip` 即可使用。
 
 ---

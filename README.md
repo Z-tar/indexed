@@ -5,10 +5,11 @@
 > 本项目是基于原作者 **[@xiaotianfotos](https://github.com/xiaotianfotos)** 的开源项目 [xiaotianfotos/indexed](https://github.com/xiaotianfotos/indexed) 进行深度优化与硬件加速的衍生分支。  
 > 原项目构建了出色的多模态视听记忆整体架构，在此向原作者致以崇高敬意！
 
-### 🌟 本分支核心增强特性 (Apple Silicon Boost)
+### 🌟 本分支核心增强特性 / Core Enhancements in This Fork (Apple Silicon Boost)
 
 本分支主要针对 **Apple Silicon M3 系列**（以 M3 Pro 为硬件基准深度调优与极限压测），并**完全兼容 M1 / M2 / M4 全系列芯片**。针对原生运行中的卡顿、闪退、硬件利用不充分等痛点，进行了系统级重构与性能升级：
 
+- **All-in-Swift 零 Node 架构 (Zero-Node Vector Engine)**：将 SQLite WAL 与 Apple Accelerate SIMD 向量检索引擎完全内嵌至 Swift 原生常驻守护进程。彻底消除 Node.js / V8 运行时、跨进程 JSON 序列化与 IPC 往返开销，搜索响应延迟从 12ms 暴降至 2.5~3ms，冷启动由 2.8s 提速至 80ms，内存常驻降低 200MB+！
 - **ANE 自适应双桶架构**：新增 256 与 2112 Tokens 双桶自适应分流，短文本 ANE 命中率提升至 100%，单次延迟降至 1.13ms。
 - **稳定性修复**：彻底修复长视频尾部分片负维度导致的 `Fatal error: [full] Negative dimensions not allowed` 底层崩溃闪退。
 - **零拷贝 IOSurface 内存直传**：消除 CPU 反复深度拷贝 8.6MB 矩阵，数据生成开销从 288s 暴降至 111ms。
@@ -17,9 +18,25 @@
 - **Chrome 扩展 0ms 乐观响应**：点击“开始记忆”按钮瞬时变色开机，消除原本 2~4 秒的卡顿等待。
 - **检索体验革新**：搜索结果按视频自动聚合为单张主卡片 + 时间点标签，支持 B 站与 YouTube 跨平台同名视频智能去重。
 - **全新 CLI 遥测仪表盘**：`indexed status` 改用 HTTP 守护探活消除文件锁冲突，直观展示 ANE/GPU 硬件调用情况与向量统计。
-- **All-in-Swift 零 Node 架构 (Zero-Node Vector Engine)**：将 SQLite WAL 与 Apple Accelerate SIMD 向量检索引擎完全内嵌至 Swift 原生常驻守护进程。彻底消除 Node.js / V8 运行时、跨进程 JSON 序列化与 IPC 往返开销，搜索响应延迟从 12ms 暴降至 2.5~3ms，冷启动由 2.8s 提速至 80ms，内存常驻降低 200MB+！
 
-📦 **最新预编译插件开箱即用**：前往 [Releases 页面](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.0.zip` 即可使用。
+<details>
+<summary><b>English Overview & Core Features (Click to expand)</b></summary>
+
+This fork is deeply optimized and stress-tested on **Apple Silicon M3 series** (with M3 Pro as the baseline), while maintaining **100% full compatibility across M1 / M2 / M4 series**. It delivers systemic refactoring and hardware acceleration to eliminate lags, crashes, and underutilized hardware:
+
+- **All-in-Swift Zero-Node Architecture**: Vector storage (SQLite WAL) and Accelerate SIMD search (`vDSP_dotpr`) are embedded directly into Swift native daemon. Completely removes Node.js / V8 runtime and JSON-over-HTTP IPC overhead. End-to-end search latency drops from 12ms to 2.5~3ms, cold start speeds up from 2.8s to 80ms, and resident memory footprint drops by 200MB+!
+- **Adaptive Dual-Bucket ANE Architecture**: Added 256 & 2112 tokens adaptive bucketing, lifting short text ANE hit rate to 100% and cutting latency to 1.13ms.
+- **Critical Stability Fixes**: Resolved the `Fatal error: [full] Negative dimensions not allowed` crash caused by negative video tail slice dimensions.
+- **Zero-Copy IOSurface Memory Pass-through**: Eliminated repeated CPU deep copies of 8.6MB matrices, plunging preparation overhead from 288s to 111ms.
+- **Custom Metal SwiGLU Kernel**: Decoupled gate and up projection matrices to fuse ANE outputs directly on GPU.
+- **Multithreaded Visual Frame Extraction**: Introduced PillowBicubic coefficient cache and multi-core concurrent decoding, accelerating preprocessing by 60%+.
+- **Chrome Extension 0ms Optimistic Response**: Instant UI state feedback on clicking "Start Memorizing", eliminating 2~4s perceived lag.
+- **Refined Search Experience**: Auto-aggregates search results by video into single cards with timestamps; deduplicates identical videos across Bilibili and YouTube.
+- **Modern CLI Telemetry Dashboard**: `indexed status` uses HTTP probing to eliminate flock conflicts and provide clear ANE/GPU telemetry and vector metrics.
+
+</details>
+
+📦 **最新预编译插件开箱即用 / Ready-to-use Prebuilt Extension**：前往 [Releases 页面 / Releases Page](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.0.zip` 即可使用。
 
 ---
 

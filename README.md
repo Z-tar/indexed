@@ -46,7 +46,7 @@ This fork is deeply optimized and stress-tested on **Apple Silicon M3 series** (
 | **常驻内存占用 / Resident Memory (RSS)** | ~480 MB (Node + Swift) | **~260 MB (Swift)** | **-220 MB (-45.8%)** |
 | **外部运行时依赖 / Runtime Dependencies** | Node.js 20+, V8, zvec C++ | **macOS 原生库 (None external)** | **完全解耦 / Fully Decoupled** |
 
-📦 **最新预编译插件开箱即用 / Ready-to-use Prebuilt Extension**：前往 [Releases 页面 / Releases Page](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.0.zip` 即可使用。
+📦 **最新预编译插件开箱即用 / Ready-to-use Prebuilt Extension**：前往 [Releases 页面 / Releases Page](https://github.com/Z-tar/indexed/releases) 直接下载打包好的 `indexed-extension-0.15.1.zip` 即可使用。
 
 ---
 

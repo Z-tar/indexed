@@ -2,7 +2,7 @@
 import { PRODUCT_DEFAULTS, SEGMENT_SCHEMAS } from "@indexed/contracts";
 
 (() => {
-  const CONTENT_SCRIPT_VERSION = "0.15.0";
+  const CONTENT_SCRIPT_VERSION = "0.15.1";
   if (globalThis.__sceneMemoryContentScriptLoaded === CONTENT_SCRIPT_VERSION) return;
   globalThis.__sceneMemoryContentScriptLoaded = CONTENT_SCRIPT_VERSION;
 
